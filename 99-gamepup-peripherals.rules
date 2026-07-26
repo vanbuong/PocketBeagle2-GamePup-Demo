@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Allow members of the spi group to use the GamePup Click socket.
+SUBSYSTEM=="spidev", KERNEL=="spidev0.0", GROUP="spi", MODE="0660"

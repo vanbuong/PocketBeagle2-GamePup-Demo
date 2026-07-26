@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Safely import supported files from the detached GamePup USB ROM inbox."""
+
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import pwd
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+import zipfile
+
+
+IMAGE = Path("/var/lib/gamepup-rom-drive/gamepup-roms.img")
+LUN_FILE = Path(
+    "/sys/kernel/config/usb_gadget/pb2/functions/mass_storage.roms/lun.0/file"
+)
+MOUNTPOINT = Path("/run/gamepup-rom-import")
+LOCK_FILE = Path("/run/lock/gamepup-rom-import.lock")
+STATUS_FILE = Path("/opt/gamepup/saves/rom-import-status")
+MAX_ARCHIVE_MEMBER = 256 * 1024 * 1024
+TARGETS = {
+    ".nes": Path("/opt/gamepup/games/nes"),
+    ".gb": Path("/opt/gamepup/games/gbc"),
+    ".gbc": Path("/opt/gamepup/games/gbc"),
+    ".z64": Path("/opt/gamepup/games/n64"),
+    ".n64": Path("/opt/gamepup/games/n64"),
+    ".v64": Path("/opt/gamepup/games/n64"),
+    ".wad": Path("/opt/gamepup/games/doom"),
+    ".gif": Path("/opt/gamepup/gifs"),
+}
+
+
+def valid_header(extension: str, header: bytes) -> bool:
+    if extension == ".nes":
+        return header.startswith(b"NES\x1a")
+    if extension in (".z64", ".n64", ".v64"):
+        return header[:4] in (b"\x80\x37\x12\x40", b"\x37\x80\x40\x12",
+                              b"\x40\x12\x37\x80")
+    if extension == ".wad":
+        return header[:4] in (b"IWAD", b"PWAD")
+    if extension == ".gif":
+        return header[:6] in (b"GIF87a", b"GIF89a")
+    if extension in (".gb", ".gbc"):
+        return len(header) >= 0x150
+    return False
+
+
+def safe_name(name: str, extension: str) -> str:
+    stem = Path(name).stem
+    stem = unicodedata.normalize("NFC", stem)
+    stem = re.sub(r"[\x00-\x1f/\\:]", "_", stem).strip(" .")
+    if not stem:
+        stem = "Imported Game"
+    return stem[:180] + extension
+
+
+def digest(path: Path) -> str:
+    result = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            result.update(block)
+    return result.hexdigest()
+
+
+def commit_temp(temp_path: Path, original_name: str, extension: str,
+                owner_uid: int, owner_gid: int, totals: dict[str, int]) -> None:
+    with temp_path.open("rb") as source:
+        header = source.read(0x200)
+    if not valid_header(extension, header):
+        totals["rejected"] += 1
+        temp_path.unlink(missing_ok=True)
+        return
+
+    target_dir = TARGETS[extension]
+    target_dir.mkdir(parents=True, exist_ok=True)
+    os.chown(target_dir, owner_uid, owner_gid)
+    destination = target_dir / safe_name(original_name, extension)
+    if destination.exists() and digest(destination) == digest(temp_path):
+        totals["unchanged"] += 1
+        temp_path.unlink()
+        return
+
+    existed = destination.exists()
+    os.chmod(temp_path, 0o644)
+    os.chown(temp_path, owner_uid, owner_gid)
+    os.replace(temp_path, destination)
+    totals["replaced" if existed else "imported"] += 1
+
+
+def copy_stream(source, original_name: str, extension: str,
+                owner_uid: int, owner_gid: int, totals: dict[str, int]) -> None:
+    target_dir = TARGETS[extension]
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=".gamepup-import-", dir=target_dir,
+                                     delete=False) as temporary:
+        temp_path = Path(temporary.name)
+        shutil.copyfileobj(source, temporary, length=1024 * 1024)
+    try:
+        commit_temp(temp_path, original_name, extension, owner_uid, owner_gid,
+                    totals)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def import_file(path: Path, owner_uid: int, owner_gid: int,
+                totals: dict[str, int]) -> None:
+    extension = path.suffix.casefold()
+    if extension in TARGETS:
+        with path.open("rb") as source:
+            copy_stream(source, path.name, extension, owner_uid, owner_gid, totals)
+        return
+    if extension != ".zip":
+        return
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.infolist():
+                member_extension = Path(member.filename).suffix.casefold()
+                if member.is_dir() or member_extension not in TARGETS:
+                    continue
+                if member.flag_bits & 0x1 or member.file_size > MAX_ARCHIVE_MEMBER:
+                    totals["rejected"] += 1
+                    continue
+                with archive.open(member) as source:
+                    copy_stream(source, Path(member.filename).name,
+                                member_extension, owner_uid, owner_gid, totals)
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        totals["rejected"] += 1
+
+
+def write_status(lines: list[str]) -> None:
+    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = STATUS_FILE.with_suffix(".tmp")
+    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    account = pwd.getpwnam("beagle")
+    os.chown(temporary, account.pw_uid, account.pw_gid)
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, STATUS_FILE)
+
+
+def run_checked(arguments: list[str], accepted: tuple[int, ...] = (0,)) -> None:
+    completed = subprocess.run(arguments, check=False, timeout=90)
+    if completed.returncode not in accepted:
+        raise RuntimeError(f"{' '.join(arguments)} returned {completed.returncode}")
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print("RESULT ERROR\nMESSAGE ROOT REQUIRED")
+        return 1
+    if not IMAGE.is_file() or not LUN_FILE.exists():
+        print("RESULT ERROR\nMESSAGE USB ROM DRIVE UNAVAILABLE")
+        return 1
+
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK_FILE.open("w", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("RESULT BUSY\nMESSAGE IMPORT ALREADY RUNNING")
+            return 2
+
+        totals = {name: 0 for name in
+                  ("imported", "replaced", "unchanged", "rejected")}
+        mounted = False
+        detached = False
+        try:
+            # The UI asks the user to eject first. Clearing the LUN here also
+            # makes the operation deterministic on hosts that keep the path set.
+            os.sync()
+            LUN_FILE.write_text("\n", encoding="ascii")
+            detached = True
+            time.sleep(0.5)
+            run_checked(["fsck.vfat", "-a", str(IMAGE)], accepted=(0, 1))
+            MOUNTPOINT.mkdir(parents=True, exist_ok=True)
+            run_checked(["mount", "-o", "loop,ro,nosuid,nodev,noexec",
+                         str(IMAGE), str(MOUNTPOINT)])
+            mounted = True
+
+            account = pwd.getpwnam("beagle")
+            for path in sorted(MOUNTPOINT.rglob("*"),
+                               key=lambda item: str(item).casefold()):
+                if path.is_file() and not path.name.startswith("._"):
+                    import_file(path, account.pw_uid, account.pw_gid, totals)
+
+            os.sync()
+            result = ["RESULT OK"] + [
+                f"{name.upper()} {totals[name]}"
+                for name in ("imported", "replaced", "unchanged", "rejected")
+            ]
+            write_status(result)
+            print("\n".join(result))
+            return 0
+        except Exception as error:
+            message = re.sub(r"\s+", " ", str(error)).strip()[:120]
+            result = ["RESULT ERROR", f"MESSAGE {message or 'IMPORT FAILED'}"]
+            write_status(result)
+            print("\n".join(result))
+            return 1
+        finally:
+            if mounted:
+                subprocess.run(["umount", str(MOUNTPOINT)], check=False,
+                               timeout=30)
+            if detached:
+                try:
+                    LUN_FILE.write_text(str(IMAGE) + "\n", encoding="ascii")
+                except OSError as error:
+                    print(f"MESSAGE USB REATTACH FAILED: {error}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

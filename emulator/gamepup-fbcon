@@ -1,0 +1,21 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Temporarily give the GamePup application exclusive ownership of /dev/fb0.
+
+set -eu
+
+case "${1:-}" in
+	detach) requested=0 ;;
+	attach) requested=1 ;;
+	*) echo "usage: $0 detach|attach" >&2; exit 2 ;;
+esac
+
+for console in /sys/class/vtconsole/vtcon*; do
+	[ -r "$console/name" ] || continue
+	case "$(cat "$console/name")" in
+		*"frame buffer device"*) ;;
+		*) continue ;;
+	esac
+	[ "$(cat "$console/bind")" = "$requested" ] ||
+		printf '%s' "$requested" > "$console/bind"
+done

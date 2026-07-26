@@ -1,0 +1,901 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Framebuffer game launcher for PocketBeagle 2 + GamePup."""
+
+from array import array
+import fcntl
+import os
+from pathlib import Path
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+
+WIDTH = 128
+HEIGHT = 160
+FRAMEBUFFER = "/dev/fb0"
+INPUT = "/dev/input/event0"
+BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
+FRONTEND = "/usr/local/bin/gamepup-retro"
+GPU_BENCHMARK = "/usr/local/bin/gamepup-gpu-bench"
+HARDWARE_TEST = "/usr/local/bin/gamepup-hardware-test"
+ROM_IMPORT = "/usr/bin/sudo"
+ROM_IMPORT_HELPER = "/usr/local/libexec/gamepup-rom-import"
+ROM_IMPORT_STATUS = Path("/opt/gamepup/saves/rom-import-status")
+GPU_BENCHMARKS = (
+    ("GPU PLASMA", "plasma"),
+    ("GPU FILL RATE", "fill"),
+    ("GPU TRIANGLES", "triangles"),
+    ("GL GEARS", "gears"),
+)
+GAME_ROOT = Path("/opt/gamepup/games")
+SELECTION_FILE = Path("/opt/gamepup/selected-rom")
+MUTE_FILE = Path("/opt/gamepup/saves/audio-muted")
+MENU_MUTE_FILE = Path("/opt/gamepup/saves/menu-beeps-muted")
+BRIGHTNESS_FILE = Path("/opt/gamepup/saves/brightness")
+GAME_BEZEL_DISABLED_FILE = Path("/opt/gamepup/saves/game-bezel-disabled")
+GAME_BEZEL_STYLE_FILE = Path("/opt/gamepup/saves/game-bezel-style")
+OLED_DISABLED_FILE = Path("/opt/gamepup/saves/oled-disabled")
+OLED_BRIGHTNESS_FILE = Path("/opt/gamepup/saves/oled-brightness")
+OLED_REFRESH_FILE = Path("/opt/gamepup/saves/oled-refresh-hz")
+OLED_CLOCK_HIDDEN_FILE = Path("/opt/gamepup/saves/oled-clock-hidden")
+OLED_PER_CORE_FILE = Path("/opt/gamepup/saves/oled-per-core")
+OLED_GPU_HIDDEN_FILE = Path("/opt/gamepup/saves/oled-gpu-hidden")
+OLED_GIF_MODE_FILE = Path("/opt/gamepup/saves/oled-gif-mode")
+OLED_GIF_SELECTION_FILE = Path("/opt/gamepup/saves/oled-gif-selection")
+OLED_GIF_ROOT = Path("/opt/gamepup/gifs")
+FPS_FILE = Path("/run/gamepup/fps")
+BACKLIGHT = Path("/sys/class/backlight/backlight-gamepup/brightness")
+BRIGHTNESS_LEVELS = tuple(range(4, 12))
+OLED_BRIGHTNESS_LEVELS = tuple(range(1, 9))
+OLED_REFRESH_LEVELS = (5, 10, 15, 20, 25, 30)
+GAME_BEZEL_STYLES = ("OFF", "GAMEPUP", "ARCADE", "SYSTEM")
+MENU_VERSION = "1.9.0"
+CORES = {
+    ".nes": "/usr/local/lib/libretro/nestopia_libretro.so",
+    ".gb": "/usr/local/lib/libretro/gambatte_libretro.so",
+    ".gbc": "/usr/local/lib/libretro/gambatte_libretro.so",
+    ".z64": "/usr/local/lib/libretro/mupen64plus_next_libretro.so",
+    ".n64": "/usr/local/lib/libretro/mupen64plus_next_libretro.so",
+    ".v64": "/usr/local/lib/libretro/mupen64plus_next_libretro.so",
+    ".wad": "/usr/local/lib/libretro/prboom_libretro.so",
+}
+
+EV_KEY = 1
+KEY_1 = 2
+KEY_5 = 6
+KEY_TAB = 15
+KEY_ENTER = 28
+KEY_LEFT = 105
+KEY_RIGHT = 106
+KEY_UP = 103
+KEY_DOWN = 108
+EVENT = struct.Struct("@llHHi")
+
+BLACK = 0x000000
+WHITE = 0xF4F4E8
+GREEN = 0x42D65C
+DARK_GREEN = 0x123D22
+YELLOW = 0xF4D35E
+BLUE = 0x174A70
+GRAY = 0x708078
+RED = 0xE85D5D
+
+FONT = {
+    " ": ("00000",) * 7,
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01111", "10000", "10000", "10111", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
+    "6": ("01110", "10000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "01110"),
+    "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
+    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    "'": ("00100", "00100", "01000", "00000", "00000", "00000", "00000"),
+    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
+    "<": ("00010", "00100", "01000", "10000", "01000", "00100", "00010"),
+    ">": ("01000", "00100", "00010", "00001", "00010", "00100", "01000"),
+    "%": ("11001", "11010", "00100", "01000", "10110", "00110", "00000"),
+    "@": ("01110", "10001", "10111", "10101", "10111", "10000", "01111"),
+    "?": ("01110", "10001", "00001", "00010", "00100", "00000", "00100"),
+}
+
+running = True
+
+
+def stop_handler(_signum, _frame):
+    global running
+    running = False
+
+
+def clean_name(path: Path) -> str:
+    name = path.stem.replace("_", " ")
+    name = re.sub(r"\s*(?:\([^)]*\)|\[[^]]*\])", "", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def installed_games() -> list[Path]:
+    games = [path for path in GAME_ROOT.rglob("*")
+             if path.is_file() and path.suffix.casefold() in CORES]
+    return sorted(games, key=lambda path: clean_name(path).casefold())
+
+
+def fill_rect(canvas: array, x: int, y: int, width: int, height: int, color: int):
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(WIDTH, x + width), min(HEIGHT, y + height)
+    row = array("I", [color]) * max(0, x1 - x0)
+    for target_y in range(y0, y1):
+        canvas[target_y * WIDTH + x0:target_y * WIDTH + x1] = row
+
+
+def draw_text(canvas: array, x: int, y: int, text: str, color: int, scale: int = 1):
+    cursor = x
+    for character in text.upper():
+        glyph = FONT.get(character, FONT["?"])
+        for glyph_y, bits in enumerate(glyph):
+            for glyph_x, bit in enumerate(bits):
+                if bit == "1":
+                    fill_rect(canvas, cursor + glyph_x * scale, y + glyph_y * scale,
+                              scale, scale, color)
+        cursor += 6 * scale
+
+
+def platform_games(games: list[Path], screen: str) -> list[Path]:
+    if screen == "nes":
+        return [game for game in games if game.suffix.casefold() == ".nes"]
+    if screen == "gbc":
+        return [game for game in games if game.suffix.casefold() in (".gb", ".gbc")]
+    if screen == "n64":
+        return [game for game in games
+                if game.suffix.casefold() in (".z64", ".n64", ".v64")]
+    if screen == "doom":
+        return [game for game in games if game.suffix.casefold() == ".wad"]
+    return []
+
+
+def doom_game(games: list[Path]):
+    doom_games = platform_games(games, "doom")
+    for game in doom_games:
+        if game.name.casefold() == "doom shareware.wad":
+            return game
+    return doom_games[0] if doom_games else None
+
+
+def menu_items(games: list[Path], screen: str) -> list[str]:
+    if screen == "home":
+        return [
+            f"NES GAMES {len(platform_games(games, 'nes'))} >",
+            f"GAME BOY {len(platform_games(games, 'gbc'))} >",
+            f"N64 GAMES {len(platform_games(games, 'n64'))} >",
+            "DOOM" if doom_game(games) else "DOOM MISSING",
+            "BENCHMARKS >",
+            "TOOLS >",
+            "SETTINGS >",
+        ]
+    if screen in ("nes", "gbc", "n64"):
+        return [clean_name(game) for game in platform_games(games, screen)]
+    if screen == "settings":
+        return [
+            "ALL SOUND MUTED" if MUTE_FILE.exists() else "ALL SOUND ON",
+            "MENU BEEPS OFF" if MENU_MUTE_FILE.exists() else "MENU BEEPS ON",
+            "BRIGHTNESS",
+            f"BEZEL {game_bezel_style()}",
+            "SECOND SCREEN >",
+            "ABOUT >",
+            "EXIT TO TTY",
+            "BACK",
+        ]
+    if screen == "benchmarks":
+        return [label for label, _argument in GPU_BENCHMARKS] + ["BACK"]
+    if screen == "tools":
+        return ["IMPORT USB ROMS >", "HARDWARE TEST", "BACK"]
+    if screen == "second":
+        return [
+            "DISPLAY OFF" if OLED_DISABLED_FILE.exists() else "DISPLAY ON",
+            "BRIGHTNESS",
+            f"REFRESH {oled_refresh_rate()}HZ",
+            "MODE GIF" if OLED_GIF_MODE_FILE.exists() else "MODE STATUS",
+            f"GIF {oled_gif_name()}",
+            "LIVE CLOCK OFF" if OLED_CLOCK_HIDDEN_FILE.exists() else "LIVE CLOCK ON",
+            "CPU PER CORE" if OLED_PER_CORE_FILE.exists() else "CPU TOTAL",
+            "GPU STATUS OFF" if OLED_GPU_HIDDEN_FILE.exists() else "GPU STATUS ON",
+            "BACK",
+        ]
+    return []
+
+
+def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    titles = {"home": "GAMEPUP", "nes": "NES GAMES", "gbc": "GAME BOY",
+              "n64": "N64 GAMES",
+              "benchmarks": "BENCHMARKS", "tools": "TOOLS",
+              "settings": "SETTINGS", "second": "2ND SCREEN", "about": "ABOUT"}
+    title = titles[screen]
+    title_width = (len(title) * 6 - 1) * 2
+    draw_text(canvas, (WIDTH - title_width) // 2, 3, title, GREEN, 2)
+    draw_text(canvas, 4, 20, "B:BACK" if screen == "about" else
+              "UP/DN A:OPEN B:BACK", GRAY)
+    fill_rect(canvas, 3, 30, WIDTH - 6, 1, DARK_GREEN)
+
+    if screen == "about":
+        draw_text(canvas, 8, 38, "VERSION", GRAY)
+        draw_text(canvas, 68, 38, MENU_VERSION, YELLOW)
+        draw_text(canvas, 8, 58, "SYSTEM", GRAY)
+        draw_text(canvas, 8, 69, "POCKETBEAGLE 2", WHITE)
+        draw_text(canvas, 8, 80, "ARMBIAN LINUX", WHITE)
+        draw_text(canvas, 8, 100, "GITHUB", GRAY)
+        draw_text(canvas, 8, 111, "@GRIPPY98", GREEN)
+        fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
+        draw_text(canvas, 5, 151, "B:BACK", GRAY)
+        os.pwrite(framebuffer, canvas.tobytes(), 0)
+        return
+
+    items = menu_items(games, screen)
+    visible = 10
+    first = max(0, min(selected - visible // 2, len(items) - visible))
+    for row_index, item_index in enumerate(range(first, min(first + visible, len(items)))):
+        y = 35 + row_index * 11
+        if item_index == selected:
+            fill_rect(canvas, 2, y - 2, WIDTH - 4, 10, BLUE)
+            color = YELLOW
+        else:
+            color = WHITE
+        draw_text(canvas, 5, y, items[item_index][:20], color)
+        slider = None
+        if screen == "settings" and item_index == 2:
+            slider = (68, 54, BRIGHTNESS_LEVELS,
+                      BRIGHTNESS_LEVELS.index(normalized_brightness_level()))
+        elif screen == "second" and item_index == 1:
+            slider = (68, 54, OLED_BRIGHTNESS_LEVELS,
+                      OLED_BRIGHTNESS_LEVELS.index(oled_brightness_level()))
+        elif screen == "second" and item_index == 2:
+            slider = (80, 42, OLED_REFRESH_LEVELS,
+                      OLED_REFRESH_LEVELS.index(oled_refresh_rate()))
+        if slider:
+            slider_x, slider_width, levels, position = slider
+            knob_x = slider_x + (slider_width - 3) * position // (len(levels) - 1)
+            fill_rect(canvas, slider_x, y + 3, slider_width, 1, GRAY)
+            fill_rect(canvas, slider_x, y + 3, knob_x - slider_x + 1, 1, color)
+            fill_rect(canvas, knob_x, y, 3, 7, color)
+
+    page = f"{selected + 1}/{len(items)}"
+    fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
+    if screen == "home":
+        muted = MUTE_FILE.exists()
+        footer = "SOUND:MUTED" if muted else "SOUND:ON"
+        footer_color = RED if muted else GREEN
+    elif screen == "settings":
+        if selected == 2:
+            footer = "LT/RT:ADJUST"
+        elif selected == 3:
+            footer = "LT/RT:STYLE"
+        else:
+            footer = "A:CHANGE"
+        footer_color = GRAY
+    elif screen == "second":
+        footer = "LT/RT:ADJUST" if selected in (1, 2, 4) else "A:CHANGE"
+        footer_color = GRAY
+    else:
+        footer, footer_color = "B:BACK", GRAY
+    draw_text(canvas, 5, 151, footer, footer_color)
+    draw_text(canvas, WIDTH - len(page) * 6 - 3, 151, page, YELLOW)
+    os.pwrite(framebuffer, canvas.tobytes(), 0)
+
+
+def read_selected_index(games: list[Path]) -> int:
+    try:
+        selected_path = Path(SELECTION_FILE.read_text(encoding="utf-8").strip())
+        return games.index(selected_path)
+    except (OSError, ValueError):
+        return 0
+
+
+def modification_time(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def keys_down(input_fd: int, keys: tuple[int, ...]) -> bool:
+    key_bits = bytearray(96)
+    eviocgkey = (2 << 30) | (len(key_bits) << 16) | (ord("E") << 8) | 0x18
+    fcntl.ioctl(input_fd, eviocgkey, key_bits, True)
+    return any(key_bits[key // 8] & (1 << (key % 8)) for key in keys)
+
+
+def wait_for_launch_keys_to_release(input_fd: int):
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and keys_down(input_fd, (KEY_1, KEY_5, KEY_TAB)):
+        time.sleep(0.05)
+    try:
+        while os.read(input_fd, EVENT.size * 32):
+            pass
+    except BlockingIOError:
+        pass
+
+
+def launch(game: Path):
+    SELECTION_FILE.write_text(str(game) + "\n", encoding="utf-8")
+    try:
+        subprocess.run([FRONTEND, str(game), CORES[game.suffix.casefold()]], check=False)
+    finally:
+        silence_buzzer()
+    if running:
+        play_sound("exit")
+
+
+def launch_gpu_benchmark(argument: str):
+    try:
+        subprocess.run([GPU_BENCHMARK, argument], check=False)
+    except OSError as error:
+        print(f"Unable to launch GPU benchmark: {error}", file=sys.stderr)
+    finally:
+        silence_buzzer()
+    if running:
+        play_sound("exit")
+
+
+def launch_hardware_test():
+    try:
+        subprocess.run([HARDWARE_TEST], check=False)
+    except OSError as error:
+        print(f"Unable to launch hardware test: {error}", file=sys.stderr)
+    finally:
+        silence_buzzer()
+    if running:
+        play_sound("exit")
+
+
+def import_usb_roms() -> list[str]:
+    try:
+        completed = subprocess.run(
+            [ROM_IMPORT, "-n", ROM_IMPORT_HELPER], check=False,
+            capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return ["IMPORT FAILED", str(error).upper()[:20]]
+
+    values = {}
+    for line in completed.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        values[key] = value.strip()
+    if values.get("RESULT") != "OK":
+        return ["IMPORT FAILED", values.get("MESSAGE", "CHECK USB DRIVE")[:20]]
+    return [
+        f"ADDED {values.get('IMPORTED', '0')}",
+        f"UPDATED {values.get('REPLACED', '0')}",
+        f"UNCHANGED {values.get('UNCHANGED', '0')}",
+        f"REJECTED {values.get('REJECTED', '0')}",
+    ]
+
+
+def draw_import_screen(framebuffer: int, result: list[str] | None = None):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    title = "USB ROM IMPORT"
+    title_width = (len(title) * 6 - 1)
+    draw_text(canvas, (WIDTH - title_width) // 2, 3, title, GREEN)
+    fill_rect(canvas, 3, 16, WIDTH - 6, 1, DARK_GREEN)
+    if result is None:
+        lines = [
+            "1 DRAG FILES TO",
+            "  GAMEPUP USB DRIVE",
+            "2 EJECT ON COMPUTER",
+            "3 AUTO IMPORTS",
+            "",
+            "A MANUAL IMPORT",
+            "ZIP FILES SUPPORTED",
+        ]
+    else:
+        lines = result
+    for index, line in enumerate(lines[:8]):
+        color = YELLOW if index == 0 and result is not None else WHITE
+        draw_text(canvas, 4, 28 + index * 13, line[:20], color)
+    fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
+    draw_text(canvas, 4, 151, "B BACK", GRAY)
+    draw_text(canvas, 70, 151, "A IMPORT", GREEN)
+    os.pwrite(framebuffer, canvas.tobytes(), 0)
+
+
+def silence_buzzer():
+    try:
+        buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        os.write(buzzer_fd, EVENT.pack(0, 0, 0x12, 2, 0))
+        os.close(buzzer_fd)
+    except OSError:
+        pass
+
+
+def play_sound(name: str):
+    if MUTE_FILE.exists() or MENU_MUTE_FILE.exists():
+        return
+    sounds = {
+        "up": ((660, 0.022), (880, 0.032)),
+        "down": ((880, 0.022), (660, 0.032)),
+        "select": ((988, 0.035), (1319, 0.055)),
+        "exit": ((988, 0.035), (659, 0.065)),
+        "unmute": ((659, 0.025), (988, 0.045)),
+    }
+    buzzer_fd = -1
+    try:
+        buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        for frequency, duration in sounds[name]:
+            os.write(buzzer_fd, EVENT.pack(0, 0, 0x12, 2, frequency))
+            time.sleep(duration)
+        os.write(buzzer_fd, EVENT.pack(0, 0, 0x12, 2, 0))
+    except (KeyError, OSError):
+        silence_buzzer()
+    finally:
+        if buzzer_fd >= 0:
+            os.close(buzzer_fd)
+
+
+def toggle_mute():
+    if MUTE_FILE.exists():
+        MUTE_FILE.unlink()
+        play_sound("unmute")
+    else:
+        MUTE_FILE.write_text("muted\n", encoding="utf-8")
+        silence_buzzer()
+
+
+def toggle_menu_beeps():
+    if MENU_MUTE_FILE.exists():
+        MENU_MUTE_FILE.unlink()
+        play_sound("unmute")
+    else:
+        play_sound("down")
+        MENU_MUTE_FILE.write_text("muted\n", encoding="utf-8")
+        silence_buzzer()
+
+
+def brightness_level() -> int:
+    for source in (BRIGHTNESS_FILE, BACKLIGHT):
+        try:
+            return int(source.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            pass
+    return BRIGHTNESS_LEVELS[-1]
+
+
+def normalized_brightness_level() -> int:
+    level = brightness_level()
+    return min(BRIGHTNESS_LEVELS, key=lambda candidate: abs(candidate - level))
+
+
+def apply_saved_brightness():
+    if not BRIGHTNESS_FILE.exists():
+        return
+    try:
+        BACKLIGHT.write_text(f"{brightness_level()}\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Unable to restore backlight brightness: {error}", file=sys.stderr)
+
+
+def adjust_brightness(direction: int) -> bool:
+    current = normalized_brightness_level()
+    position = BRIGHTNESS_LEVELS.index(current)
+    new_position = max(0, min(len(BRIGHTNESS_LEVELS) - 1, position + direction))
+    if new_position == position:
+        return False
+    level = BRIGHTNESS_LEVELS[new_position]
+    try:
+        BACKLIGHT.write_text(f"{level}\n", encoding="utf-8")
+        BRIGHTNESS_FILE.write_text(f"{level}\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Unable to change backlight brightness: {error}", file=sys.stderr)
+        return False
+    return True
+
+
+def game_bezel_style() -> str:
+    if GAME_BEZEL_DISABLED_FILE.exists():
+        return "OFF"
+    try:
+        style = GAME_BEZEL_STYLE_FILE.read_text(encoding="utf-8").strip().upper()
+    except OSError:
+        style = "GAMEPUP"
+    if style == "PHOTO":
+        style = "SYSTEM"
+    return style if style in GAME_BEZEL_STYLES else "GAMEPUP"
+
+
+def adjust_game_bezel_style(direction: int) -> bool:
+    position = GAME_BEZEL_STYLES.index(game_bezel_style())
+    style = GAME_BEZEL_STYLES[(position + direction) % len(GAME_BEZEL_STYLES)]
+    try:
+        GAME_BEZEL_STYLE_FILE.write_text(f"{style}\n", encoding="utf-8")
+        GAME_BEZEL_DISABLED_FILE.unlink(missing_ok=True)
+    except OSError as error:
+        print(f"Unable to change game bezel: {error}", file=sys.stderr)
+        return False
+    return True
+
+
+def read_setting_level(path: Path, levels: tuple[int, ...], default: int) -> int:
+    try:
+        value = int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        value = default
+    return min(levels, key=lambda candidate: abs(candidate - value))
+
+
+def oled_brightness_level() -> int:
+    return read_setting_level(OLED_BRIGHTNESS_FILE, OLED_BRIGHTNESS_LEVELS, 7)
+
+
+def oled_refresh_rate() -> int:
+    return read_setting_level(OLED_REFRESH_FILE, OLED_REFRESH_LEVELS, 20)
+
+
+def oled_gifs() -> list[Path]:
+    try:
+        return sorted((path for path in OLED_GIF_ROOT.iterdir()
+                       if path.is_file() and path.suffix.casefold() == ".gif"),
+                      key=lambda path: path.name.casefold())
+    except OSError:
+        return []
+
+
+def selected_oled_gif() -> Path | None:
+    gifs = oled_gifs()
+    if not gifs:
+        return None
+    try:
+        selected_name = OLED_GIF_SELECTION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        selected_name = ""
+    return next((path for path in gifs if path.name == selected_name), gifs[0])
+
+
+def oled_gif_name() -> str:
+    selected = selected_oled_gif()
+    if selected is None:
+        return "NONE"
+    return re.sub(r"[-_]+", " ", selected.stem).upper()[:16]
+
+
+def adjust_oled_gif(direction: int) -> bool:
+    gifs = oled_gifs()
+    selected = selected_oled_gif()
+    if not gifs or selected is None:
+        return False
+    position = gifs.index(selected)
+    new_selected = gifs[(position + direction) % len(gifs)]
+    try:
+        OLED_GIF_SELECTION_FILE.write_text(new_selected.name + "\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Unable to select OLED GIF: {error}", file=sys.stderr)
+        return False
+    return new_selected != selected
+
+
+def adjust_setting_level(path: Path, levels: tuple[int, ...], current: int,
+                         direction: int) -> bool:
+    position = levels.index(current)
+    new_position = max(0, min(len(levels) - 1, position + direction))
+    if new_position == position:
+        return False
+    try:
+        path.write_text(f"{levels[new_position]}\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Unable to change {path.name}: {error}", file=sys.stderr)
+        return False
+    return True
+
+
+def toggle_setting(path: Path):
+    try:
+        if path.exists():
+            path.unlink()
+        else:
+            path.write_text("1\n", encoding="utf-8")
+    except OSError as error:
+        print(f"Unable to change {path.name}: {error}", file=sys.stderr)
+
+
+def run_menu(games: list[Path]) -> int:
+    screen = "home"
+    import_status_time = modification_time(ROM_IMPORT_STATUS)
+    selected = {
+        "home": 0,
+        "nes": read_selected_index(platform_games(games, "nes")),
+        "gbc": read_selected_index(platform_games(games, "gbc")),
+        "n64": read_selected_index(platform_games(games, "n64")),
+        "benchmarks": 0,
+        "tools": 0,
+        "settings": 0,
+        "second": 0,
+        "about": 0,
+    }
+    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+    input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+
+    try:
+        draw_menu(framebuffer, games, screen, selected[screen])
+        while running:
+            readable, _, _ = select.select([input_fd], [], [], 0.5)
+            if not readable:
+                new_status_time = modification_time(ROM_IMPORT_STATUS)
+                if new_status_time != import_status_time:
+                    import_status_time = new_status_time
+                    games[:] = installed_games()
+                    for platform in ("nes", "gbc", "n64"):
+                        count = len(platform_games(games, platform))
+                        selected[platform] = min(selected[platform], max(0, count - 1))
+                    if screen not in ("about", "import"):
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                continue
+            data = os.read(input_fd, EVENT.size * 32)
+            for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                _seconds, _micros, event_type, code, value = EVENT.unpack_from(data, offset)
+                if event_type != EV_KEY or value != 1:
+                    continue
+                if screen == "about":
+                    if code in (KEY_ENTER, KEY_TAB, KEY_1):
+                        play_sound("exit")
+                        screen = "settings"
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    continue
+                if screen == "import":
+                    if code in (KEY_TAB, KEY_1):
+                        play_sound("select")
+                        draw_import_screen(framebuffer, ["IMPORTING", "PLEASE WAIT"])
+                        result = import_usb_roms()
+                        games[:] = installed_games()
+                        draw_import_screen(framebuffer, result)
+                    elif code == KEY_ENTER:
+                        play_sound("exit")
+                        screen = "tools"
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    continue
+                items = menu_items(games, screen)
+                if code == KEY_UP:
+                    selected[screen] = (selected[screen] - 1) % len(items)
+                    play_sound("up")
+                    draw_menu(framebuffer, games, screen, selected[screen])
+                elif code == KEY_DOWN:
+                    selected[screen] = (selected[screen] + 1) % len(items)
+                    play_sound("down")
+                    draw_menu(framebuffer, games, screen, selected[screen])
+                elif code in (KEY_TAB, KEY_1):
+                    if screen == "home":
+                        if selected["home"] == 3:
+                            game = doom_game(games)
+                            if game is None:
+                                play_sound("exit")
+                                draw_menu(framebuffer, games, screen, selected[screen])
+                                continue
+                            play_sound("select")
+                            os.close(input_fd)
+                            os.close(framebuffer)
+                            launch(game)
+                            if not running:
+                                return 0
+                            framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                            input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                            wait_for_launch_keys_to_release(input_fd)
+                            games[:] = installed_games()
+                            screen = "home"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                            break
+                        target_screen = {0: "nes", 1: "gbc", 2: "n64",
+                                         4: "benchmarks", 5: "tools",
+                                         6: "settings"}[selected["home"]]
+                        if target_screen in ("nes", "gbc", "n64") and not \
+                                platform_games(games, target_screen):
+                            play_sound("exit")
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                            continue
+                        screen = target_screen
+                        play_sound("select")
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen in ("nes", "gbc", "n64"):
+                        game_list = platform_games(games, screen)
+                        game = game_list[selected[screen]]
+                        play_sound("select")
+                        os.close(input_fd)
+                        os.close(framebuffer)
+                        launch(game)
+                        if not running:
+                            return 0
+                        framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                        wait_for_launch_keys_to_release(input_fd)
+                        games[:] = installed_games()
+                        selected[screen] = read_selected_index(platform_games(games, screen))
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                        break
+                    elif screen == "benchmarks":
+                        benchmark_index = selected["benchmarks"]
+                        if benchmark_index == len(GPU_BENCHMARKS):
+                            play_sound("exit")
+                            screen = "home"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                            continue
+                        play_sound("select")
+                        os.close(input_fd)
+                        os.close(framebuffer)
+                        launch_gpu_benchmark(GPU_BENCHMARKS[benchmark_index][1])
+                        if not running:
+                            return 0
+                        framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                        wait_for_launch_keys_to_release(input_fd)
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                        break
+                    elif screen == "tools":
+                        tool_index = selected["tools"]
+                        if tool_index == 0:
+                            play_sound("select")
+                            screen = "import"
+                            draw_import_screen(framebuffer)
+                        elif tool_index == 1:
+                            play_sound("select")
+                            os.close(input_fd)
+                            os.close(framebuffer)
+                            launch_hardware_test()
+                            if not running:
+                                return 0
+                            framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                            input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                            wait_for_launch_keys_to_release(input_fd)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                            break
+                        else:
+                            play_sound("exit")
+                            screen = "home"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen == "settings":
+                        if selected["settings"] == 0:
+                            toggle_mute()
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["settings"] == 1:
+                            toggle_menu_beeps()
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["settings"] == 2:
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["settings"] == 3:
+                            adjust_game_bezel_style(1)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["settings"] == 4:
+                            play_sound("select")
+                            screen = "second"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["settings"] == 5:
+                            play_sound("select")
+                            screen = "about"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["settings"] == 6:
+                            play_sound("exit")
+                            return 0
+                        else:
+                            play_sound("exit")
+                            screen = "home"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen == "second":
+                        if selected["second"] == 0:
+                            toggle_setting(OLED_DISABLED_FILE)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["second"] in (1, 2):
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["second"] == 3:
+                            toggle_setting(OLED_GIF_MODE_FILE)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["second"] == 4:
+                            adjust_oled_gif(1)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["second"] == 5:
+                            toggle_setting(OLED_CLOCK_HIDDEN_FILE)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["second"] == 6:
+                            toggle_setting(OLED_PER_CORE_FILE)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        elif selected["second"] == 7:
+                            toggle_setting(OLED_GPU_HIDDEN_FILE)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                        else:
+                            play_sound("exit")
+                            screen = "settings"
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                elif code in (KEY_LEFT, KEY_RIGHT):
+                    direction = -1 if code == KEY_LEFT else 1
+                    if screen == "settings" and selected["settings"] == 2:
+                        if adjust_brightness(direction):
+                            play_sound("down" if direction < 0 else "up")
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen == "settings" and selected["settings"] == 3:
+                        if adjust_game_bezel_style(direction):
+                            play_sound("down" if direction < 0 else "up")
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen == "second" and selected["second"] == 1:
+                        if adjust_setting_level(OLED_BRIGHTNESS_FILE,
+                                                OLED_BRIGHTNESS_LEVELS,
+                                                oled_brightness_level(), direction):
+                            play_sound("down" if direction < 0 else "up")
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen == "second" and selected["second"] == 2:
+                        if adjust_setting_level(OLED_REFRESH_FILE, OLED_REFRESH_LEVELS,
+                                                oled_refresh_rate(), direction):
+                            play_sound("down" if direction < 0 else "up")
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen == "second" and selected["second"] == 4:
+                        if adjust_oled_gif(direction):
+                            play_sound("down" if direction < 0 else "up")
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                elif code == KEY_ENTER:
+                    if screen == "second":
+                        play_sound("exit")
+                        screen = "settings"
+                        draw_menu(framebuffer, games, screen, selected[screen])
+                    elif screen != "home":
+                        play_sound("exit")
+                        screen = "home"
+                        draw_menu(framebuffer, games, screen, selected[screen])
+    finally:
+        try:
+            os.close(input_fd)
+        except OSError:
+            pass
+        try:
+            os.close(framebuffer)
+        except OSError:
+            pass
+    return 0
+
+
+def main() -> int:
+    games = installed_games()
+    if len(sys.argv) > 1 and sys.argv[1] == "--list":
+        for game in games:
+            print(f"{game.suffix[1:].upper():3}  {clean_name(game)}")
+        return 0
+    if not games:
+        print(f"No games found under {GAME_ROOT}", file=sys.stderr)
+        return 1
+    try:
+        FPS_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+    apply_saved_brightness()
+    return run_menu(games)
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, stop_handler)
+    signal.signal(signal.SIGTERM, stop_handler)
+    raise SystemExit(main())

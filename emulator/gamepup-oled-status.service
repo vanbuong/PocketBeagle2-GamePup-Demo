@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Unit]
+Description=GamePup OLED C system status display
+After=dev-spidev0.0.device
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gamepup-oled-status
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

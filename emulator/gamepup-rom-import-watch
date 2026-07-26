@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Import the ROM inbox when the host safely ejects the removable USB LUN.
+
+set -u
+
+LUN_FILE=/sys/kernel/config/usb_gadget/pb2/functions/mass_storage.roms/lun.0/file
+UDC_FILE=/sys/kernel/config/usb_gadget/pb2/UDC
+IMPORTER=/usr/local/libexec/gamepup-rom-import
+
+while :; do
+	if [ -r "$LUN_FILE" ] && [ -r "$UDC_FILE" ] && \
+		[ -n "$(cat "$UDC_FILE" 2>/dev/null)" ] && \
+		[ -z "$(cat "$LUN_FILE" 2>/dev/null)" ]; then
+		"$IMPORTER" || true
+	fi
+	sleep 1
+done

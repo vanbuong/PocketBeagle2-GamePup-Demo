@@ -1,0 +1,34 @@
+# Game images and commercial data must never be committed.
+*.nes
+*.gb
+*.gbc
+*.z64
+*.n64
+*.v64
+*.wad
+*.rom
+*.sav
+*.srm
+*.state
+*.zip
+*.7z
+
+# Locally built binaries and kernel/device-tree output.
+emulator/build/
+emulator/gamepup-retro
+emulator/gamepup-oled-status
+emulator/gamepup-gpu-bench
+*.o
+*.so
+*.ko
+*.dtbo
+
+# Device images, captures, caches, and workstation metadata.
+*.img
+*.raw
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Unused legacy photo-derived bezel experiments have unclear provenance.
+emulator/bezels/*-photo.rgb

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Unit]
+Description=Import GamePup ROM inbox after USB eject
+After=pb2-usb-gadget.service
+Wants=pb2-usb-gadget.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/gamepup-rom-import-watch
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

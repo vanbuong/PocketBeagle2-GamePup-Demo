@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Select and launch an installed GamePup ROM by partial name."""
+
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+GAME_ROOT = Path("/opt/gamepup/games")
+SELECTION_PATH = Path("/opt/gamepup/selected-rom")
+CORES = {
+    ".nes": Path("/usr/local/lib/libretro/nestopia_libretro.so"),
+    ".gb": Path("/usr/local/lib/libretro/gambatte_libretro.so"),
+    ".gbc": Path("/usr/local/lib/libretro/gambatte_libretro.so"),
+    ".z64": Path("/usr/local/lib/libretro/mupen64plus_next_libretro.so"),
+    ".n64": Path("/usr/local/lib/libretro/mupen64plus_next_libretro.so"),
+    ".v64": Path("/usr/local/lib/libretro/mupen64plus_next_libretro.so"),
+}
+
+
+def normalized(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+
+def installed_games() -> list[Path]:
+    games = []
+    for extension in CORES:
+        games.extend(GAME_ROOT.rglob(f"*{extension}"))
+    return sorted(games, key=lambda path: path.name.casefold())
+
+
+def list_games(games: list[Path]) -> None:
+    for game in games:
+        print(game.stem)
+
+
+def main() -> int:
+    games = installed_games()
+    if len(sys.argv) == 1 or sys.argv[1:] == ["--list"]:
+        list_games(games)
+        return 0
+
+    query = normalized(" ".join(sys.argv[1:]))
+    exact = [game for game in games if normalized(game.stem) == query]
+    matches = exact or [game for game in games if query in normalized(game.stem)]
+    if not matches:
+        print("No installed game matched that name.", file=sys.stderr)
+        return 1
+    if len(matches) > 1:
+        print("More than one game matched; use a more specific name:", file=sys.stderr)
+        list_games(matches)
+        return 1
+    if os.geteuid() != 0:
+        print("Run the selection with sudo so the service can be updated.", file=sys.stderr)
+        return 1
+
+    game = matches[0]
+    SELECTION_PATH.write_text(str(game) + "\n", encoding="utf-8")
+    subprocess.run(["systemctl", "restart", "gamepup-game.service"], check=True)
+    print(f"Selected in the GamePup menu: {game.stem}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

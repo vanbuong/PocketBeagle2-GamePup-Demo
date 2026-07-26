@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Interactive GamePup A4 button, LED, buzzer, display, and backlight test."""
+
+from array import array
+import fcntl
+import os
+from pathlib import Path
+import select
+import signal
+import struct
+import sys
+import time
+
+
+WIDTH = 128
+HEIGHT = 160
+FRAMEBUFFER = "/dev/fb0"
+INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
+BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
+LEFT_LED = Path("/sys/class/leds/gamepup:left-eye/brightness")
+RIGHT_LED = Path("/sys/class/leds/gamepup:right-eye/brightness")
+BACKLIGHT = Path("/sys/class/backlight/backlight-gamepup/brightness")
+EVENT = struct.Struct("@llHHi")
+EV_KEY = 1
+EV_SND = 0x12
+SND_TONE = 2
+
+KEY_ESC = 1
+KEY_1 = 2
+KEY_5 = 6
+KEY_TAB = 15
+KEY_P = 25
+KEY_ENTER = 28
+KEY_LEFT = 105
+KEY_RIGHT = 106
+KEY_UP = 103
+KEY_DOWN = 108
+
+BLACK = 0x000000
+WHITE = 0xF4F4E8
+GREEN = 0x42D65C
+DARK_GREEN = 0x123D22
+YELLOW = 0xF4D35E
+BLUE = 0x174A70
+GRAY = 0x708078
+RED = 0xE85D5D
+MAGENTA = 0xC850C0
+CYAN = 0x40D8D0
+
+FONT = {
+    " ": ("00000",) * 7,
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01111", "10000", "10000", "10111", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
+    "6": ("01110", "10000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "01110"),
+    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
+    "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
+    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    "%": ("11001", "11010", "00100", "01000", "10110", "00110", "00000"),
+    "?": ("01110", "10001", "00001", "00010", "00100", "00000", "00100"),
+}
+
+BUTTONS = {
+    KEY_UP: ("UP", 23, 42, 20, 12),
+    KEY_LEFT: ("LT", 4, 56, 20, 12),
+    KEY_RIGHT: ("RT", 42, 56, 20, 12),
+    KEY_DOWN: ("DN", 23, 70, 20, 12),
+    KEY_ESC: ("X", 89, 42, 16, 12),
+    KEY_P: ("Y", 72, 56, 16, 12),
+    KEY_TAB: ("A", 106, 56, 16, 12),
+    KEY_ENTER: ("B", 89, 70, 16, 12),
+    KEY_5: ("SEL", 24, 91, 32, 12),
+    KEY_1: ("START", 69, 91, 48, 12),
+}
+
+running = True
+
+
+def stop_handler(_signum, _frame):
+    global running
+    running = False
+
+
+def fill_rect(canvas: array, x: int, y: int, width: int, height: int, color: int):
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(WIDTH, x + width), min(HEIGHT, y + height)
+    row = array("I", [color]) * max(0, x1 - x0)
+    for target_y in range(y0, y1):
+        canvas[target_y * WIDTH + x0:target_y * WIDTH + x1] = row
+
+
+def draw_text(canvas: array, x: int, y: int, text: str, color: int, scale: int = 1):
+    cursor = x
+    for character in text.upper():
+        glyph = FONT.get(character, FONT["?"])
+        for glyph_y, bits in enumerate(glyph):
+            for glyph_x, bit in enumerate(bits):
+                if bit == "1":
+                    fill_rect(canvas, cursor + glyph_x * scale,
+                              y + glyph_y * scale, scale, scale, color)
+        cursor += 6 * scale
+
+
+def centered_text(canvas: array, y: int, text: str, color: int, scale: int = 1):
+    width = (len(text) * 6 - 1) * scale
+    draw_text(canvas, (WIDTH - width) // 2, y, text, color, scale)
+
+
+def write_led(path: Path, enabled: bool):
+    try:
+        path.write_text("1\n" if enabled else "0\n", encoding="ascii")
+    except OSError as error:
+        print(f"Unable to control {path}: {error}", file=sys.stderr)
+
+
+def write_tone(buzzer_fd: int, frequency: int):
+    try:
+        os.write(buzzer_fd, EVENT.pack(0, 0, EV_SND, SND_TONE, frequency))
+    except OSError as error:
+        print(f"Unable to control buzzer: {error}", file=sys.stderr)
+
+
+def brightness_value() -> int:
+    try:
+        return int(BACKLIGHT.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return 11
+
+
+def adjust_brightness(direction: int) -> int:
+    level = max(0, min(11, brightness_value() + direction))
+    try:
+        BACKLIGHT.write_text(f"{level}\n", encoding="ascii")
+    except OSError as error:
+        print(f"Unable to control backlight: {error}", file=sys.stderr)
+    return level
+
+
+def draw_color_test(framebuffer: int, pattern: int):
+    colors = (RED, GREEN, BLUE, WHITE, BLACK)
+    if pattern <= len(colors):
+        canvas = array("I", [colors[pattern - 1]]) * (WIDTH * HEIGHT)
+        label_color = BLACK if colors[pattern - 1] == WHITE else WHITE
+        centered_text(canvas, 145, "START NEXT", label_color)
+    else:
+        canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+        bars = (WHITE, YELLOW, CYAN, GREEN, MAGENTA, RED, BLUE, BLACK)
+        bar_width = WIDTH // len(bars)
+        for index, color in enumerate(bars):
+            fill_rect(canvas, index * bar_width, 0,
+                      WIDTH if index == len(bars) - 1 else bar_width,
+                      HEIGHT, color)
+        fill_rect(canvas, 22, 143, 84, 11, BLACK)
+        centered_text(canvas, 145, "START UI", WHITE)
+    os.pwrite(framebuffer, canvas.tobytes(), 0)
+
+
+def draw_ui(framebuffer: int, pressed: set[int], tested: set[int],
+            frequency: int, brightness: int):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    centered_text(canvas, 3, "HARDWARE TEST", GREEN)
+    centered_text(canvas, 14, f"BUTTONS {len(tested)}/10", YELLOW)
+    fill_rect(canvas, 3, 27, WIDTH - 6, 1, DARK_GREEN)
+
+    for code, (label, x, y, width, height) in BUTTONS.items():
+        if code in pressed:
+            color, text_color = YELLOW, BLACK
+        elif code in tested:
+            color, text_color = DARK_GREEN, GREEN
+        else:
+            color, text_color = BLUE, WHITE
+        fill_rect(canvas, x, y, width, height, color)
+        text_width = len(label) * 6 - 1
+        draw_text(canvas, x + (width - text_width) // 2, y + 2,
+                  label, text_color)
+
+    draw_text(canvas, 3, 108, "X LEFT EYE", GRAY)
+    draw_text(canvas, 67, 108, "Y RIGHT", GRAY)
+    draw_text(canvas, 3, 119, "A BOTH EYES", GRAY)
+    draw_text(canvas, 73, 119, "B TONE", GRAY)
+    draw_text(canvas, 3, 130, f"UP/DN {frequency}HZ", WHITE)
+    draw_text(canvas, 3, 141, f"LT/RT LIGHT {brightness}/11", WHITE)
+    draw_text(canvas, 2, 152, "ST COLOR  SEL+ST EXIT", GREEN)
+    os.pwrite(framebuffer, canvas.tobytes(), 0)
+
+
+def outputs_off(buzzer_fd: int):
+    write_led(LEFT_LED, False)
+    write_led(RIGHT_LED, False)
+    write_tone(buzzer_fd, 0)
+
+
+def startup_self_test(buzzer_fd: int):
+    for left, right in ((True, False), (False, True), (True, True)):
+        write_led(LEFT_LED, left)
+        write_led(RIGHT_LED, right)
+        time.sleep(0.12)
+    outputs_off(buzzer_fd)
+    write_tone(buzzer_fd, 880)
+    time.sleep(0.14)
+    write_tone(buzzer_fd, 0)
+
+
+def keys_down(input_fd: int) -> set[int]:
+    key_bits = bytearray(96)
+    eviocgkey = (2 << 30) | (len(key_bits) << 16) | (ord("E") << 8) | 0x18
+    fcntl.ioctl(input_fd, eviocgkey, key_bits, True)
+    return {code for code in BUTTONS
+            if key_bits[code // 8] & (1 << (code % 8))}
+
+
+def run_test(self_test_only: bool = False) -> int:
+    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+    buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    input_fd = -1
+    original_brightness = brightness_value()
+    try:
+        startup_self_test(buzzer_fd)
+        if self_test_only:
+            print("LED and buzzer output self-test completed.")
+            return 0
+
+        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        pressed: set[int] = set()
+        tested: set[int] = set()
+        frequency = 880
+        brightness = original_brightness
+        pattern = 0
+        exit_started: float | None = None
+        draw_ui(framebuffer, pressed, tested, frequency, brightness)
+
+        while running:
+            readable, _, _ = select.select([input_fd], [], [], 0.04)
+            redraw = False
+            if readable:
+                data = os.read(input_fd, EVENT.size * 32)
+                for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                    _seconds, _micros, event_type, code, value = EVENT.unpack_from(
+                        data, offset)
+                    if event_type != EV_KEY or code not in BUTTONS:
+                        continue
+                    if value:
+                        pressed.add(code)
+                        tested.add(code)
+                    else:
+                        pressed.discard(code)
+                    if value == 1:
+                        if code == KEY_UP:
+                            frequency = min(2000, frequency + 100)
+                        elif code == KEY_DOWN:
+                            frequency = max(200, frequency - 100)
+                        elif code == KEY_LEFT:
+                            brightness = adjust_brightness(-1)
+                        elif code == KEY_RIGHT:
+                            brightness = adjust_brightness(1)
+                        elif code == KEY_1 and KEY_5 not in pressed:
+                            pattern = (pattern + 1) % 7
+                    redraw = True
+
+            write_led(LEFT_LED, KEY_ESC in pressed or KEY_TAB in pressed)
+            write_led(RIGHT_LED, KEY_P in pressed or KEY_TAB in pressed)
+            write_tone(buzzer_fd, frequency if KEY_ENTER in pressed else 0)
+
+            if KEY_1 in pressed and KEY_5 in pressed:
+                if exit_started is None:
+                    exit_started = time.monotonic()
+                elif time.monotonic() - exit_started >= 1.0:
+                    break
+            else:
+                exit_started = None
+
+            if redraw:
+                if pattern:
+                    draw_color_test(framebuffer, pattern)
+                else:
+                    draw_ui(framebuffer, pressed, tested, frequency, brightness)
+        return 0
+    finally:
+        outputs_off(buzzer_fd)
+        try:
+            BACKLIGHT.write_text(f"{original_brightness}\n", encoding="ascii")
+        except OSError:
+            pass
+        if input_fd >= 0:
+            os.close(input_fd)
+        os.close(buzzer_fd)
+        os.close(framebuffer)
+
+
+def main() -> int:
+    try:
+        return run_test(len(sys.argv) > 1 and sys.argv[1] == "--self-test")
+    except OSError as error:
+        print(f"Hardware test unavailable: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, stop_handler)
+    signal.signal(signal.SIGTERM, stop_handler)
+    raise SystemExit(main())
