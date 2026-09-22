@@ -20,7 +20,7 @@ DEVICE_USER=${DEVICE_USER:-beagle}
 
 missing_packages=
 for package in build-essential ca-certificates curl device-tree-compiler \
-	dosfstools gcc-14 libegl-dev libgif-dev libgles-dev; do
+	dosfstools gcc-14 libgif-dev; do
 	if ! dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | \
 		grep -q '^ii'; then
 		missing_packages="$missing_packages $package"
@@ -78,13 +78,43 @@ udevadm control --reload-rules
 udevadm trigger --subsystem-match=spidev
 
 install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/local/sbin
-make -C "$SCRIPT_DIR/emulator" all
-install -m 0755 "$SCRIPT_DIR/emulator/gamepup-retro" \
-	/usr/local/bin/gamepup-retro
+# Khronos headers are vendored under emulator/khronos so we never need Mesa
+# libegl-dev (it Conflicts with TI libegl-mesa0-pvr). Link against whatever
+# libEGL is present; if none, install Mesa runtime only when TI PVR is absent.
+egl_link_ok=0
+if echo 'int main(void){return 0;}' | gcc -x c - -lEGL -lGLESv2 \
+	-o /tmp/gamepup-egl-check 2>/dev/null; then
+	egl_link_ok=1
+	rm -f /tmp/gamepup-egl-check
+elif ! dpkg-query -W -f='${db:Status-Abbrev}' ti-img-rogue-umlibs-am62 \
+	2>/dev/null | grep -q '^ii'; then
+	apt-get install -y --no-install-recommends libegl1 libgles2 || true
+	if echo 'int main(void){return 0;}' | gcc -x c - -lEGL -lGLESv2 \
+		-o /tmp/gamepup-egl-check 2>/dev/null; then
+		egl_link_ok=1
+		rm -f /tmp/gamepup-egl-check
+	fi
+fi
+make -C "$SCRIPT_DIR/emulator" clean
+if [ "$egl_link_ok" = 1 ] && make -C "$SCRIPT_DIR/emulator" all; then
+	:
+elif make -C "$SCRIPT_DIR/emulator" apps; then
+	echo "Built without GLES apps; run emulator/install-gpu.sh to install" \
+		"TI PowerVR and build gamepup-retro / gamepup-gpu-bench." >&2
+else
+	echo "Failed to build GamePup userspace apps." >&2
+	exit 1
+fi
+if [ -e "$SCRIPT_DIR/emulator/gamepup-retro" ]; then
+	install -m 0755 "$SCRIPT_DIR/emulator/gamepup-retro" \
+		/usr/local/bin/gamepup-retro
+fi
 install -m 0755 "$SCRIPT_DIR/emulator/gamepup-oled-status" \
 	/usr/local/bin/gamepup-oled-status
-install -m 0755 "$SCRIPT_DIR/emulator/gamepup-gpu-bench" \
-	/usr/local/bin/gamepup-gpu-bench
+if [ -e "$SCRIPT_DIR/emulator/gamepup-gpu-bench" ]; then
+	install -m 0755 "$SCRIPT_DIR/emulator/gamepup-gpu-bench" \
+		/usr/local/bin/gamepup-gpu-bench
+fi
 install -d -m 0755 /opt/gamepup/gifs
 install -m 0644 "$SCRIPT_DIR/emulator/gifs/"*.gif /opt/gamepup/gifs/
 install -d -m 0755 /usr/local/share/gamepup/bezels

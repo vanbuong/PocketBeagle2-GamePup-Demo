@@ -176,7 +176,8 @@ build_userspace() {
 	make -C "$ROOT_DIR/emulator" -j"$BUILD_JOBS" \
 		CC="$CROSS_GCC" \
 		LIBRETRO_INCLUDE="$include_dir" \
-		CFLAGS="-O2 -pipe -std=c11 -Wall -Wextra -Wpedantic -I$include_dir" \
+		KHRONOS_INCLUDE="$ROOT_DIR/emulator/khronos" \
+		CFLAGS="-O2 -pipe -std=c11 -Wall -Wextra -Wpedantic -I$include_dir -I$ROOT_DIR/emulator/khronos" \
 		LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 	install -m 0755 \
 		"$ROOT_DIR/emulator/gamepup-retro" \

@@ -28,6 +28,7 @@ beside the assets.
 | Component | How it is used | Upstream license/status |
 |---|---|---|
 | [Linux](https://github.com/torvalds/linux) `drm_mipi_dbi` and `ili9341` | `install.sh` downloads matching source and builds modules on the device | GPL-2.0-only; follow Linux's module/source redistribution requirements |
+| [Khronos EGL / OpenGL ES headers](https://github.com/KhronosGroup/EGL-Registry) | Vendored under `emulator/khronos/` for GLES builds without Mesa `-dev` packages | Apache-2.0 |
 | [libretro API](https://github.com/libretro/RetroArch/tree/master/libretro-common/include) | Header used to build the frontend | MIT |
 | [Nestopia](https://github.com/libretro/nestopia) | NES libretro core | GPL-2.0 family; see the upstream repository for component-specific notices |
 | [Gambatte](https://github.com/libretro/gambatte-libretro) | Game Boy/Game Boy Color libretro core | GPL-2.0 |

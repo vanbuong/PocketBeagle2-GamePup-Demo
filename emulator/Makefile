@@ -1,13 +1,20 @@
 # SPDX-License-Identifier: GPL-2.0-only
 CC ?= gcc
 LIBRETRO_INCLUDE ?= /usr/local/include
+KHRONOS_INCLUDE ?= $(CURDIR)/khronos
 CFLAGS ?= -O2 -pipe
-CFLAGS += -std=c11 -Wall -Wextra -Wpedantic -I$(LIBRETRO_INCLUDE)
+CFLAGS += -std=c11 -Wall -Wextra -Wpedantic \
+	-I$(LIBRETRO_INCLUDE) -I$(KHRONOS_INCLUDE)
 LDLIBS += -ldl
 
-.PHONY: all clean
+.PHONY: all clean gles apps
 
-all: gamepup-retro gamepup-oled-status gamepup-gpu-bench
+# GLES targets need libEGL/libGLESv2 at link time (TI PVR or Mesa).
+all: gamepup-oled-status gamepup-retro gamepup-gpu-bench
+
+gles: gamepup-retro gamepup-gpu-bench
+
+apps: gamepup-oled-status
 
 gamepup-retro: gamepup-retro.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS) -lEGL -lGLESv2

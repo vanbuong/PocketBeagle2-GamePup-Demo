@@ -325,6 +325,13 @@ TI's driver, rejects LLVMpipe or other software renderers, copies the result to
 the GamePup LCD, and shows its measured frame rate. Hold Start+Select to return
 to the benchmark folder.
 
+On PocketBeagle 2 Debian IoT, do **not** install Mesa `libegl-dev` /
+`libgles-dev` alongside the TI stack: those packages pull `libegl1`, which
+conflicts with TI's `libegl-mesa0-pvr`. GamePup vendors Khronos EGL/GLES
+headers under `emulator/khronos/` and links against TI's runtime libraries from
+`ti-img-rogue-umlibs-am62`. `install-gpu.sh` removes conflicting Mesa packages
+before installing the TI packages.
+
 The GPU stack follows Armbian's
 [`beagleplay.conf`](https://github.com/armbian/build/blob/main/config/boards/beagleplay.conf):
 TI's AM62 DKMS kernel module, firmware, userspace/tools, and Mesa PVR packages
