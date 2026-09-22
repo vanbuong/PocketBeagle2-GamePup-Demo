@@ -292,8 +292,9 @@ static bool open_framebuffer(int *framebuffer_fd)
 	fb_height = variable.yres;
 	fb_bpp = variable.bits_per_pixel;
 	fb_stride = fixed.line_length;
-	if (fb_bpp != 32) {
-		fprintf(stderr, "Expected a 32-bit framebuffer, got %u bpp\n", fb_bpp);
+	if (fb_bpp != 16 && fb_bpp != 32) {
+		fprintf(stderr, "Expected a 16- or 32-bit framebuffer, got %u bpp\n",
+			fb_bpp);
 		close(fd);
 		return false;
 	}
@@ -312,8 +313,8 @@ static bool open_framebuffer(int *framebuffer_fd)
 		close(fd);
 		return false;
 	}
-	fprintf(stderr, "GamePup framebuffer %ux%u stride=%u\n",
-		fb_width, fb_height, fb_stride);
+	fprintf(stderr, "GamePup framebuffer %ux%u stride=%u bpp=%u\n",
+		fb_width, fb_height, fb_stride, fb_bpp);
 	*framebuffer_fd = fd;
 	return true;
 }
@@ -323,12 +324,27 @@ static void present_canvas(int framebuffer_fd, const uint32_t *canvas)
 {
 	size_t written = 0;
 
-	if (fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT) {
+	if (fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT && fb_bpp == 32) {
 		for (unsigned y = 0; y < fb_height; ++y) {
 			uint32_t *row = (uint32_t *)(fb_frame + y * fb_stride);
 
 			memcpy(row, canvas + y * LCD_WIDTH,
 			       (size_t)LCD_WIDTH * sizeof(*canvas));
+		}
+	} else if (fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT && fb_bpp == 16) {
+		for (unsigned y = 0; y < fb_height; ++y) {
+			uint16_t *row = (uint16_t *)(fb_frame + y * fb_stride);
+
+			for (int x = 0; x < LCD_WIDTH; ++x) {
+				uint32_t color = canvas[y * LCD_WIDTH + x];
+				unsigned red = (color >> 16) & 0xff;
+				unsigned green = (color >> 8) & 0xff;
+				unsigned blue = color & 0xff;
+
+				row[x] = (uint16_t)(((red >> 3) << 11) |
+						    ((green >> 2) << 5) |
+						    (blue >> 3));
+			}
 		}
 	} else {
 		/* Portrait FB 240x320: rotate landscape canvas 90° CCW. */
@@ -336,10 +352,24 @@ static void present_canvas(int framebuffer_fd, const uint32_t *canvas)
 			for (int x = 0; x < LCD_WIDTH; ++x) {
 				int dst_x = y;
 				int dst_y = LCD_WIDTH - 1 - x;
-				uint32_t *row = (uint32_t *)(fb_frame +
-							     (size_t)dst_y * fb_stride);
+				uint32_t color = canvas[y * LCD_WIDTH + x];
 
-				row[dst_x] = canvas[y * LCD_WIDTH + x];
+				if (fb_bpp == 16) {
+					uint16_t *row = (uint16_t *)(fb_frame +
+								     (size_t)dst_y * fb_stride);
+					unsigned red = (color >> 16) & 0xff;
+					unsigned green = (color >> 8) & 0xff;
+					unsigned blue = color & 0xff;
+
+					row[dst_x] = (uint16_t)(((red >> 3) << 11) |
+								((green >> 2) << 5) |
+								(blue >> 3));
+				} else {
+					uint32_t *row = (uint32_t *)(fb_frame +
+								     (size_t)dst_y * fb_stride);
+
+					row[dst_x] = color;
+				}
 			}
 		}
 	}

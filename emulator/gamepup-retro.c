@@ -73,12 +73,19 @@ static void *core_handle;
 static int fb_fd = -1;
 static int input_fd = -1;
 static int buzzer_fd = -1;
+/* Logical landscape canvas used for scaling/bezels (always 32-bit XRGB). */
 static uint8_t *fb_frame;
 static size_t fb_frame_size;
-static unsigned fb_width;
-static unsigned fb_height;
-static unsigned fb_stride;
-static unsigned fb_bpp;
+static unsigned fb_width = 320;
+static unsigned fb_height = 240;
+static unsigned fb_stride = 320 * 4;
+/* Physical /dev/fb0 geometry (may be 16 bpp and/or portrait). */
+static uint8_t *fb_present;
+static size_t fb_present_size;
+static unsigned hw_width;
+static unsigned hw_height;
+static unsigned hw_stride;
+static unsigned hw_bpp;
 static enum retro_pixel_format pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static EGLDisplay hw_display = EGL_NO_DISPLAY;
 static EGLSurface hw_surface = EGL_NO_SURFACE;
@@ -597,13 +604,61 @@ static uint64_t source_coordinate(unsigned destination_index,
 	return coordinate > 32768 ? coordinate - 32768 : 0;
 }
 
+static uint32_t xrgb_to_rgb565(uint32_t color)
+{
+	unsigned red = (color >> 16) & 0xff;
+	unsigned green = (color >> 8) & 0xff;
+	unsigned blue = color & 0xff;
+
+	return (uint32_t)(((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3));
+}
+
 static void write_framebuffer(void)
 {
 	size_t written = 0;
+	const uint32_t *src = (const uint32_t *)fb_frame;
 
-	while (written < fb_frame_size) {
-		ssize_t result = pwrite(fb_fd, fb_frame + written,
-					fb_frame_size - written, (off_t)written);
+	if (hw_width == fb_width && hw_height == fb_height && hw_bpp == 32) {
+		for (unsigned y = 0; y < fb_height; ++y)
+			memcpy(fb_present + y * hw_stride,
+			       fb_frame + y * fb_stride,
+			       (size_t)fb_width * 4);
+	} else if (hw_width == fb_width && hw_height == fb_height && hw_bpp == 16) {
+		for (unsigned y = 0; y < fb_height; ++y) {
+			uint16_t *dst = (uint16_t *)(fb_present + y * hw_stride);
+
+			for (unsigned x = 0; x < fb_width; ++x)
+				dst[x] = (uint16_t)xrgb_to_rgb565(src[y * fb_width + x]);
+		}
+	} else if (hw_width == fb_height && hw_height == fb_width) {
+		/* Portrait panel: rotate landscape canvas 90° CCW. */
+		for (unsigned y = 0; y < fb_height; ++y) {
+			for (unsigned x = 0; x < fb_width; ++x) {
+				unsigned dst_x = y;
+				unsigned dst_y = fb_width - 1 - x;
+				uint32_t color = src[y * fb_width + x];
+
+				if (hw_bpp == 16) {
+					uint16_t *row = (uint16_t *)(fb_present +
+								     dst_y * hw_stride);
+					row[dst_x] = (uint16_t)xrgb_to_rgb565(color);
+				} else {
+					uint32_t *row = (uint32_t *)(fb_present +
+								     dst_y * hw_stride);
+					row[dst_x] = color;
+				}
+			}
+		}
+	} else {
+		fprintf(stderr, "Unsupported framebuffer mapping %ux%u/%ubpp\n",
+			hw_width, hw_height, hw_bpp);
+		keep_running = 0;
+		return;
+	}
+
+	while (written < fb_present_size) {
+		ssize_t result = pwrite(fb_fd, fb_present + written,
+					fb_present_size - written, (off_t)written);
 		if (result < 0 && errno == EINTR)
 			continue;
 		if (result <= 0) {
@@ -1340,20 +1395,35 @@ static void open_devices(const char *framebuffer_path, const char *input_path)
 		perror(framebuffer_path);
 		exit(EXIT_FAILURE);
 	}
-	fb_width = variable.xres;
-	fb_height = variable.yres;
-	fb_bpp = variable.bits_per_pixel;
-	fb_stride = fixed.line_length;
-	if (fb_bpp != 32) {
-		fprintf(stderr, "Expected a 32-bit framebuffer, got %u bpp\n", fb_bpp);
+	hw_width = variable.xres;
+	hw_height = variable.yres;
+	hw_bpp = variable.bits_per_pixel;
+	hw_stride = fixed.line_length;
+	if (hw_bpp != 16 && hw_bpp != 32) {
+		fprintf(stderr, "Expected a 16- or 32-bit framebuffer, got %u bpp\n",
+			hw_bpp);
 		exit(EXIT_FAILURE);
 	}
+	if (!((hw_width == 320 && hw_height == 240) ||
+	      (hw_width == 240 && hw_height == 320))) {
+		fprintf(stderr,
+			"Unsupported framebuffer %ux%u (need 320x240 or 240x320)\n",
+			hw_width, hw_height);
+		exit(EXIT_FAILURE);
+	}
+	fb_width = 320;
+	fb_height = 240;
+	fb_stride = fb_width * 4;
 	fb_frame_size = (size_t)fb_stride * fb_height;
 	fb_frame = calloc(1, fb_frame_size);
-	if (!fb_frame) {
+	fb_present_size = (size_t)hw_stride * hw_height;
+	fb_present = calloc(1, fb_present_size);
+	if (!fb_frame || !fb_present) {
 		perror("calloc framebuffer");
 		exit(EXIT_FAILURE);
 	}
+	fprintf(stderr, "GamePup framebuffer view 320x240 -> hw %ux%u stride=%u bpp=%u\n",
+		hw_width, hw_height, hw_stride, hw_bpp);
 
 	input_fd = open(input_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (input_fd < 0) {
@@ -1503,6 +1573,7 @@ int main(int argc, char **argv)
 		close(buzzer_fd);
 	close(fb_fd);
 	free(fb_frame);
+	free(fb_present);
 	free(rom_data);
 	clear_core_variables();
 	return EXIT_SUCCESS;
