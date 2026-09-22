@@ -13,7 +13,7 @@ and an optional 96x96 OLED dashboard.
 This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 
 - the ten buttons as a Linux `gpio-keys` keyboard;
-- the Adafruit 1.8-inch ST7735R display as DRM/fbdev;
+- the ILI9341 display as DRM/fbdev (landscape 320x240);
 - PWM display backlight;
 - both eye LEDs;
 - PWM buzzer;
@@ -27,8 +27,10 @@ device tree.
 
 ## Screenshots
 
-The images below are native captures from the 128x160 GamePup LCD. Click one
-to view it at its original pixel resolution.
+The images below are native captures from the original 128x160 GamePup LCD.
+They remain as historical UI references; the current tree targets an ILI9341
+landscape **320x240** framebuffer. Click one to view it at its original pixel
+resolution.
 
 <table>
   <tr>
@@ -56,19 +58,20 @@ commercial game imagery is included. Capture provenance is documented in
 
 ## Displays and render resolutions
 
-The main ST7735R LCD is a portrait **128x160** framebuffer using 32-bit XRGB.
-Menus, the hardware tester, and GPU benchmarks render at the native 128x160
-resolution. Games keep their intended aspect ratio and use the remaining rows
+The main ILI9341 LCD is a landscape **320x240** framebuffer using 32-bit XRGB
+(`rotation = <90>` in the overlay; use `270` if your panel is upside-down).
+Menus, the hardware tester, and GPU benchmarks render at the native 320x240
+resolution. Games keep their intended aspect ratio and use the remaining space
 for black bands or the optional bezel.
 
-| Content | Source/render resolution | LCD game area | Letterbox rows |
-|---|---:|---:|---:|
-| Menu, tools, tests | 128x160 | 128x160 | none |
-| Game Boy / Game Boy Color | 160x144 | 128x115 | 22 top, 23 bottom |
-| NES | 256x240 | 128x120 | 20 top, 20 bottom |
-| Nintendo 64 | 320x240 PowerVR pbuffer | 128x96 | 32 top, 32 bottom |
-| Doom | normally 320x200 from PrBoom | 128x96, corrected to 4:3 | 32 top, 32 bottom |
-| PowerVR benchmarks | 128x160 OpenGL ES pbuffer | 128x160 | none |
+| Content | Source/render resolution | LCD game area | Letterbox |
+|---|---:|---:|---|
+| Menu, tools, tests | 320x240 | 320x240 | none |
+| Game Boy / Game Boy Color | 160x144 | 266x240 | ~27 left/right |
+| NES | 256x240 | 256x240 | 32 left/right |
+| Nintendo 64 | 320x240 PowerVR pbuffer | 320x240 | none |
+| Doom | normally 320x200 from PrBoom | 320x240, corrected to 4:3 | none (fills height) |
+| PowerVR benchmarks | 320x240 OpenGL ES pbuffer | 320x240 | none |
 
 The optional OLED C Click is a separate **96x96 RGB565** display. Both its
 status dashboard and GIF mode render at 96x96; it does not mirror the main LCD.
@@ -108,7 +111,7 @@ because compiling it directly on the board is slow and memory-intensive.
 
 ## Manual installation
 
-The installed Armbian vendor kernel has the DRM ST7735R driver disabled, so
+The installed Armbian vendor kernel has the DRM ILI9341 driver disabled, so
 `install.sh` builds the two required matching upstream Linux modules against
 the installed Armbian headers, installs the overlay, and adds it to
 `/boot/extlinux/extlinux.conf`.
@@ -163,13 +166,13 @@ can remain on disk harmlessly when they are no longer referenced.
 
 Because these modules are built for one exact kernel release, rerun the
 installer after a kernel upgrade if the new Armbian kernel still leaves the
-ST7735R driver disabled.
+ILI9341 driver disabled.
 
 ## Game Boy Color
 
 The `emulator/` directory contains a minimal libretro frontend tailored to
-the 128x160 GamePup framebuffer. Game Boy video is a particularly good match:
-its native 160x144 image scales to 128x115 and is centered vertically. ROMs are
+the 320x240 GamePup framebuffer. Game Boy video scales to fill the panel height
+(about 266x240) and is centered horizontally. ROMs are
 user-supplied and kept outside this repository.
 
 Controls:
@@ -191,8 +194,9 @@ effects, but cannot reproduce the original multi-channel audio or volume.
 ## NES library
 
 User-owned NES ROMs are stored separately under `/opt/gamepup/games/nes`.
-The menu launches them through the Nestopia libretro core. NES video is reduced
-from 256x240 to 128x120 with bilinear sampling and centered vertically.
+The menu launches them through the Nestopia libretro core. NES video scales
+from 256x240 to 256x240 on the landscape panel (with 32-pixel side pillars)
+using bilinear sampling.
 
 List installed games or preselect one by a unique portion of the title. After
 preselecting over SSH, press A or Start on the GamePup to launch it:
@@ -211,8 +215,8 @@ right-pad down is B, and the labeled Select and Start buttons map directly.
 The `N64 GAMES` folder launches user-owned `.z64`, `.n64`, and `.v64` images
 through a pinned ARM64 build of Mupen64Plus-Next. GLideN64 renders into a
 320x240 OpenGL ES 3 pbuffer on the AM625's PowerVR AXE-1-16M GPU; the frontend
-reads that GPU result back, scales it to the LCD's 128x96 game area, and adds
-the selected top and bottom bezel. It explicitly rejects LLVMpipe and other
+reads that GPU result back and presents it 1:1 on the 320x240 LCD, with
+optional side/top bezels when letterboxing remains. It explicitly rejects LLVMpipe and other
 software renderers.
 
 The PocketBeagle 2 has little memory available to the GPU's contiguous-memory
@@ -296,7 +300,7 @@ The home screen's `BENCHMARKS` folder contains four hardware-only OpenGL ES
 tests for the AM625's PowerVR AXE-1-16M GPU: `GPU PLASMA` stresses shader ALU,
 `GPU FILL RATE` draws 48 blended full-screen layers per frame, and
 `GPU TRIANGLES` submits 2,048 animated triangles per frame. `GL GEARS`
-renders three lit, depth-tested 3D cogwheels. Each test renders at 128x160 with
+renders three lit, depth-tested 3D cogwheels. Each test renders at 320x240 with
 TI's driver, rejects LLVMpipe or other software renderers, copies the result to
 the GamePup LCD, and shows its measured frame rate. Hold Start+Select to return
 to the benchmark folder.

@@ -15,8 +15,8 @@ import sys
 import time
 
 
-WIDTH = 128
-HEIGHT = 160
+WIDTH = 320
+HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/event0"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
@@ -253,38 +253,40 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
     fill_rect(canvas, 3, 30, WIDTH - 6, 1, DARK_GREEN)
 
     if screen == "about":
-        draw_text(canvas, 8, 38, "VERSION", GRAY)
-        draw_text(canvas, 68, 38, MENU_VERSION, YELLOW)
-        draw_text(canvas, 8, 58, "SYSTEM", GRAY)
-        draw_text(canvas, 8, 69, "POCKETBEAGLE 2", WHITE)
-        draw_text(canvas, 8, 80, "ARMBIAN LINUX", WHITE)
-        draw_text(canvas, 8, 100, "GITHUB", GRAY)
-        draw_text(canvas, 8, 111, "@GRIPPY98", GREEN)
-        fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
-        draw_text(canvas, 5, 151, "B:BACK", GRAY)
+        draw_text(canvas, 16, 48, "VERSION", GRAY)
+        draw_text(canvas, 100, 48, MENU_VERSION, YELLOW)
+        draw_text(canvas, 16, 78, "SYSTEM", GRAY)
+        draw_text(canvas, 16, 92, "POCKETBEAGLE 2", WHITE)
+        draw_text(canvas, 16, 106, "ARMBIAN LINUX", WHITE)
+        draw_text(canvas, 16, 136, "DISPLAY", GRAY)
+        draw_text(canvas, 16, 150, "ILI9341 320X240", WHITE)
+        draw_text(canvas, 16, 178, "GITHUB", GRAY)
+        draw_text(canvas, 16, 192, "@GRIPPY98", GREEN)
+        fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
+        draw_text(canvas, 8, 228, "B:BACK", GRAY)
         os.pwrite(framebuffer, canvas.tobytes(), 0)
         return
 
     items = menu_items(games, screen)
-    visible = 10
+    visible = 16
     first = max(0, min(selected - visible // 2, len(items) - visible))
     for row_index, item_index in enumerate(range(first, min(first + visible, len(items)))):
-        y = 35 + row_index * 11
+        y = 38 + row_index * 11
         if item_index == selected:
             fill_rect(canvas, 2, y - 2, WIDTH - 4, 10, BLUE)
             color = YELLOW
         else:
             color = WHITE
-        draw_text(canvas, 5, y, items[item_index][:20], color)
+        draw_text(canvas, 8, y, items[item_index][:48], color)
         slider = None
         if screen == "settings" and item_index == 2:
-            slider = (68, 54, BRIGHTNESS_LEVELS,
+            slider = (200, 96, BRIGHTNESS_LEVELS,
                       BRIGHTNESS_LEVELS.index(normalized_brightness_level()))
         elif screen == "second" and item_index == 1:
-            slider = (68, 54, OLED_BRIGHTNESS_LEVELS,
+            slider = (200, 96, OLED_BRIGHTNESS_LEVELS,
                       OLED_BRIGHTNESS_LEVELS.index(oled_brightness_level()))
         elif screen == "second" and item_index == 2:
-            slider = (80, 42, OLED_REFRESH_LEVELS,
+            slider = (220, 72, OLED_REFRESH_LEVELS,
                       OLED_REFRESH_LEVELS.index(oled_refresh_rate()))
         if slider:
             slider_x, slider_width, levels, position = slider
@@ -294,7 +296,7 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
             fill_rect(canvas, knob_x, y, 3, 7, color)
 
     page = f"{selected + 1}/{len(items)}"
-    fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
+    fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
     if screen == "home":
         muted = MUTE_FILE.exists()
         footer = "SOUND:MUTED" if muted else "SOUND:ON"
@@ -312,8 +314,8 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         footer_color = GRAY
     else:
         footer, footer_color = "B:BACK", GRAY
-    draw_text(canvas, 5, 151, footer, footer_color)
-    draw_text(canvas, WIDTH - len(page) * 6 - 3, 151, page, YELLOW)
+    draw_text(canvas, 8, 228, footer, footer_color)
+    draw_text(canvas, WIDTH - len(page) * 6 - 6, 228, page, YELLOW)
     os.pwrite(framebuffer, canvas.tobytes(), 0)
 
 
@@ -388,14 +390,14 @@ def import_usb_roms() -> list[str]:
             [ROM_IMPORT, "-n", ROM_IMPORT_HELPER], check=False,
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as error:
-        return ["IMPORT FAILED", str(error).upper()[:20]]
+        return ["IMPORT FAILED", str(error).upper()[:48]]
 
     values = {}
     for line in completed.stdout.splitlines():
         key, _, value = line.partition(" ")
         values[key] = value.strip()
     if values.get("RESULT") != "OK":
-        return ["IMPORT FAILED", values.get("MESSAGE", "CHECK USB DRIVE")[:20]]
+        return ["IMPORT FAILED", values.get("MESSAGE", "CHECK USB DRIVE")[:48]]
     return [
         f"ADDED {values.get('IMPORTED', '0')}",
         f"UPDATED {values.get('REPLACED', '0')}",
@@ -408,8 +410,8 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     title = "USB ROM IMPORT"
     title_width = (len(title) * 6 - 1)
-    draw_text(canvas, (WIDTH - title_width) // 2, 3, title, GREEN)
-    fill_rect(canvas, 3, 16, WIDTH - 6, 1, DARK_GREEN)
+    draw_text(canvas, (WIDTH - title_width) // 2, 8, title, GREEN)
+    fill_rect(canvas, 3, 24, WIDTH - 6, 1, DARK_GREEN)
     if result is None:
         lines = [
             "1 DRAG FILES TO",
@@ -422,12 +424,12 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
         ]
     else:
         lines = result
-    for index, line in enumerate(lines[:8]):
+    for index, line in enumerate(lines[:10]):
         color = YELLOW if index == 0 and result is not None else WHITE
-        draw_text(canvas, 4, 28 + index * 13, line[:20], color)
-    fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
-    draw_text(canvas, 4, 151, "B BACK", GRAY)
-    draw_text(canvas, 70, 151, "A IMPORT", GREEN)
+        draw_text(canvas, 16, 40 + index * 16, line[:48], color)
+    fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
+    draw_text(canvas, 8, 228, "B BACK", GRAY)
+    draw_text(canvas, 200, 228, "A IMPORT", GREEN)
     os.pwrite(framebuffer, canvas.tobytes(), 0)
 
 

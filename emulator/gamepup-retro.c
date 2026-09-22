@@ -116,8 +116,12 @@ enum bezel_style {
 	BEZEL_SYSTEM,
 };
 
+#define BEZEL_WIDTH 320
+#define BEZEL_BAND_HEIGHT 20
+#define BEZEL_HEIGHT (BEZEL_BAND_HEIGHT * 2)
+
 static enum bezel_style bezel_style = BEZEL_GAMEPUP;
-static uint32_t system_bezel[128 * 40];
+static uint32_t system_bezel[BEZEL_WIDTH * BEZEL_HEIGHT];
 static bool system_bezel_loaded;
 
 struct bezel_glyph {
@@ -715,12 +719,19 @@ static void draw_arcade_bezel(unsigned top, unsigned game_height)
 				((x / 8 + y / 4) & 1) ? tile_b : tile_a);
 	framebuffer_fill_rect(0, (int)top - 1, (int)fb_width, 1, cyan);
 	framebuffer_fill_rect(0, bottom_start, (int)fb_width, 1, magenta);
-	framebuffer_fill_rect(34, top_text_y - 1, 59, 9, background);
-	framebuffer_fill_rect(36, bottom_text_y - 1, 56, 9, background);
-	draw_bezel_text(((int)fb_width - bezel_text_width("ARCADE")) / 2,
-			 top_text_y, "ARCADE", magenta);
-	draw_bezel_text(((int)fb_width - bezel_text_width(system)) / 2,
-			 bottom_text_y, system, cyan);
+	{
+		int arcade_w = bezel_text_width("ARCADE");
+		int system_w = bezel_text_width(system);
+		int arcade_x = ((int)fb_width - arcade_w) / 2;
+		int system_x = ((int)fb_width - system_w) / 2;
+
+		framebuffer_fill_rect(arcade_x - 2, top_text_y - 1,
+				      arcade_w + 4, 9, background);
+		framebuffer_fill_rect(system_x - 2, bottom_text_y - 1,
+				      system_w + 4, 9, background);
+		draw_bezel_text(arcade_x, top_text_y, "ARCADE", magenta);
+		draw_bezel_text(system_x, bottom_text_y, system, cyan);
+	}
 }
 
 static bool load_system_bezel(void)
@@ -731,7 +742,7 @@ static bool load_system_bezel(void)
 			       strcmp(mode, "DOOM") == 0 ? "doom-system.rgb" :
 			       "gbc-system.rgb";
 	char path[256];
-	uint8_t pixels[128 * 40 * 3];
+	uint8_t pixels[BEZEL_WIDTH * BEZEL_HEIGHT * 3];
 	size_t offset = 0;
 	int fd;
 
@@ -751,7 +762,7 @@ static bool load_system_bezel(void)
 	close(fd);
 	if (offset != sizeof(pixels))
 		return false;
-	for (size_t pixel = 0; pixel < 128 * 40; ++pixel)
+	for (size_t pixel = 0; pixel < BEZEL_WIDTH * BEZEL_HEIGHT; ++pixel)
 		system_bezel[pixel] = ((uint32_t)pixels[pixel * 3] << 16) |
 				     ((uint32_t)pixels[pixel * 3 + 1] << 8) |
 				     pixels[pixel * 3 + 2];
@@ -769,19 +780,22 @@ static void draw_system_bezel(unsigned top, unsigned game_height)
 
 	framebuffer_fill_rect(0, 0, (int)fb_width, (int)fb_height, 0x00000000);
 	for (int y = 0; y < (int)top; ++y) {
-		unsigned source_y = (unsigned)y * 20 / top;
+		unsigned source_y = (unsigned)y * BEZEL_BAND_HEIGHT / top;
 		uint32_t *destination = (uint32_t *)(fb_frame + y * fb_stride);
 
 		for (unsigned x = 0; x < fb_width; ++x)
-			destination[x] = system_bezel[source_y * 128 + x * 128 / fb_width];
+			destination[x] = system_bezel[source_y * BEZEL_WIDTH +
+						       x * BEZEL_WIDTH / fb_width];
 	}
 	for (int y = 0; y < bottom_height; ++y) {
-		unsigned source_y = 20 + (unsigned)y * 20 / (unsigned)bottom_height;
+		unsigned source_y = BEZEL_BAND_HEIGHT +
+			(unsigned)y * BEZEL_BAND_HEIGHT / (unsigned)bottom_height;
 		uint32_t *destination = (uint32_t *)(fb_frame +
 						       (bottom_start + y) * fb_stride);
 
 		for (unsigned x = 0; x < fb_width; ++x)
-			destination[x] = system_bezel[source_y * 128 + x * 128 / fb_width];
+			destination[x] = system_bezel[source_y * BEZEL_WIDTH +
+						       x * BEZEL_WIDTH / fb_width];
 	}
 	framebuffer_fill_rect(0, (int)top - 1, (int)fb_width, 1, accent);
 	framebuffer_fill_rect(0, bottom_start, (int)fb_width, 1, accent);

@@ -106,8 +106,14 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
+	/*
+	 * ILI9341 240x320 panel driven by the DRM tiny ili9341 driver.
+	 * rotation 90 yields a landscape 320x240 framebuffer.  Use 270 if
+	 * the image is upside-down on your panel.  The adafruit,yx240qv29
+	 * compatible string is what the out-of-tree ili9341 module matches.
+	 */
 	display@0 {
-		compatible = "jianda,jd-t18003-t01", "sitronix,st7735r";
+		compatible = "adafruit,yx240qv29";
 		reg = <0>;
 		spi-max-frequency = <32000000>;
 		pinctrl-names = "default";
@@ -115,7 +121,7 @@
 		dc-gpios = <&main_gpio0 64 0>;
 		reset-gpios = <&main_gpio1 0 0>;
 		backlight = <&gamepup_backlight>;
-		rotation = <0>;
+		rotation = <90>;
 	};
 };
 

@@ -11,7 +11,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 KERNEL_VERSION=$(uname -r)
 UPSTREAM_VERSION=v${KERNEL_VERSION%%-*}
 KERNEL_CC=${KERNEL_CC:-gcc-14}
-MODULE_SOURCE_DIR=/usr/src/gamepup-st7735r-$KERNEL_VERSION
+MODULE_SOURCE_DIR=/usr/src/gamepup-ili9341-$KERNEL_VERSION
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
 OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
 OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
@@ -54,13 +54,13 @@ install -m 0644 "$SCRIPT_DIR/Makefile" "$MODULE_SOURCE_DIR/Makefile"
 
 curl -fsSLo "$MODULE_SOURCE_DIR/drm_mipi_dbi.c" \
 	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/drm_mipi_dbi.c"
-curl -fsSLo "$MODULE_SOURCE_DIR/st7735r.c" \
-	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/tiny/st7735r.c"
+curl -fsSLo "$MODULE_SOURCE_DIR/ili9341.c" \
+	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/tiny/ili9341.c"
 
 make -C "/lib/modules/$KERNEL_VERSION/build" M="$MODULE_SOURCE_DIR" \
 	CC="$KERNEL_CC" modules
 install -m 0644 "$MODULE_SOURCE_DIR/drm_mipi_dbi.ko" "$MODULE_INSTALL_DIR/"
-install -m 0644 "$MODULE_SOURCE_DIR/st7735r.ko" "$MODULE_INSTALL_DIR/"
+install -m 0644 "$MODULE_SOURCE_DIR/ili9341.ko" "$MODULE_INSTALL_DIR/"
 depmod -a "$KERNEL_VERSION"
 
 dtc -@ -I dts -O dtb -o "$OVERLAY_TARGET" \
@@ -141,7 +141,8 @@ if ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
 fi
 
 modprobe drm_mipi_dbi
-modprobe st7735r
+modprobe ili9341
 
 echo "GamePup A4 support installed for kernel $KERNEL_VERSION."
+echo "ILI9341 landscape 320x240 framebuffer will appear after reboot."
 echo "Reboot to apply the overlay."

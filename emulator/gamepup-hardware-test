@@ -13,8 +13,8 @@ import sys
 import time
 
 
-WIDTH = 128
-HEIGHT = 160
+WIDTH = 320
+HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
@@ -95,16 +95,16 @@ FONT = {
 }
 
 BUTTONS = {
-    KEY_UP: ("UP", 23, 42, 20, 12),
-    KEY_LEFT: ("LT", 4, 56, 20, 12),
-    KEY_RIGHT: ("RT", 42, 56, 20, 12),
-    KEY_DOWN: ("DN", 23, 70, 20, 12),
-    KEY_ESC: ("X", 89, 42, 16, 12),
-    KEY_P: ("Y", 72, 56, 16, 12),
-    KEY_TAB: ("A", 106, 56, 16, 12),
-    KEY_ENTER: ("B", 89, 70, 16, 12),
-    KEY_5: ("SEL", 24, 91, 32, 12),
-    KEY_1: ("START", 69, 91, 48, 12),
+    KEY_UP: ("UP", 58, 52, 40, 18),
+    KEY_LEFT: ("LT", 18, 76, 40, 18),
+    KEY_RIGHT: ("RT", 98, 76, 40, 18),
+    KEY_DOWN: ("DN", 58, 100, 40, 18),
+    KEY_ESC: ("X", 222, 52, 36, 18),
+    KEY_P: ("Y", 182, 76, 36, 18),
+    KEY_TAB: ("A", 262, 76, 36, 18),
+    KEY_ENTER: ("B", 222, 100, 36, 18),
+    KEY_5: ("SEL", 60, 138, 64, 18),
+    KEY_1: ("START", 180, 138, 80, 18),
 }
 
 running = True
@@ -175,7 +175,7 @@ def draw_color_test(framebuffer: int, pattern: int):
     if pattern <= len(colors):
         canvas = array("I", [colors[pattern - 1]]) * (WIDTH * HEIGHT)
         label_color = BLACK if colors[pattern - 1] == WHITE else WHITE
-        centered_text(canvas, 145, "START NEXT", label_color)
+        centered_text(canvas, 220, "START NEXT", label_color)
     else:
         canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
         bars = (WHITE, YELLOW, CYAN, GREEN, MAGENTA, RED, BLUE, BLACK)
@@ -184,8 +184,8 @@ def draw_color_test(framebuffer: int, pattern: int):
             fill_rect(canvas, index * bar_width, 0,
                       WIDTH if index == len(bars) - 1 else bar_width,
                       HEIGHT, color)
-        fill_rect(canvas, 22, 143, 84, 11, BLACK)
-        centered_text(canvas, 145, "START UI", WHITE)
+        fill_rect(canvas, (WIDTH - 96) // 2, 216, 96, 14, BLACK)
+        centered_text(canvas, 220, "START UI", WHITE)
     os.pwrite(framebuffer, canvas.tobytes(), 0)
 
 
@@ -208,13 +208,13 @@ def draw_ui(framebuffer: int, pressed: set[int], tested: set[int],
         draw_text(canvas, x + (width - text_width) // 2, y + 2,
                   label, text_color)
 
-    draw_text(canvas, 3, 108, "X LEFT EYE", GRAY)
-    draw_text(canvas, 67, 108, "Y RIGHT", GRAY)
-    draw_text(canvas, 3, 119, "A BOTH EYES", GRAY)
-    draw_text(canvas, 73, 119, "B TONE", GRAY)
-    draw_text(canvas, 3, 130, f"UP/DN {frequency}HZ", WHITE)
-    draw_text(canvas, 3, 141, f"LT/RT LIGHT {brightness}/11", WHITE)
-    draw_text(canvas, 2, 152, "ST COLOR  SEL+ST EXIT", GREEN)
+    draw_text(canvas, 16, 170, "X LEFT EYE", GRAY)
+    draw_text(canvas, 160, 170, "Y RIGHT EYE", GRAY)
+    draw_text(canvas, 16, 184, "A BOTH EYES", GRAY)
+    draw_text(canvas, 160, 184, "B TONE", GRAY)
+    draw_text(canvas, 16, 198, f"UP/DN {frequency}HZ", WHITE)
+    draw_text(canvas, 160, 198, f"LT/RT LIGHT {brightness}/11", WHITE)
+    centered_text(canvas, 220, "ST COLOR  SEL+ST EXIT", GREEN)
     os.pwrite(framebuffer, canvas.tobytes(), 0)
 
 

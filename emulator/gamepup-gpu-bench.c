@@ -28,8 +28,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define LCD_WIDTH 128
-#define LCD_HEIGHT 160
+#define LCD_WIDTH 320
+#define LCD_HEIGHT 240
 #define RENDER_SCALE 1
 #define RENDER_WIDTH (LCD_WIDTH * RENDER_SCALE)
 #define RENDER_HEIGHT (LCD_HEIGHT * RENDER_SCALE)
@@ -709,20 +709,20 @@ int main(int argc, char **argv)
 					rendered_pixels[offset + 2];
 			}
 		}
-		fill_rect(lcd_pixels, 0, 0, LCD_WIDTH, 23, 0x00030a10);
-		fill_rect(lcd_pixels, 0, 135, LCD_WIDTH, 25, 0x00030a10);
+		fill_rect(lcd_pixels, 0, 0, LCD_WIDTH, 28, 0x00030a10);
+		fill_rect(lcd_pixels, 0, 210, LCD_WIDTH, 30, 0x00030a10);
 		draw_text(lcd_pixels,
 			  (LCD_WIDTH - text_width("AXE-1-16M GPU", 1)) / 2,
-			  2, "AXE-1-16M GPU", 1, 0x0041cedc);
+			  4, "AXE-1-16M GPU", 1, 0x0041cedc);
 		draw_text(lcd_pixels,
 			  (LCD_WIDTH - text_width(mode->label, 1)) / 2,
-			  13, mode->label, 1, 0x00f4f4e8);
+			  16, mode->label, 1, 0x00f4f4e8);
 		snprintf(stats, sizeof(stats), "%.1f FPS", displayed_fps);
 		draw_text(lcd_pixels, (LCD_WIDTH - text_width(stats, 1)) / 2,
-			  139, stats, 1, 0x00f4d35e);
+			  216, stats, 1, 0x00f4d35e);
 		draw_text(lcd_pixels,
 			  (LCD_WIDTH - text_width("HOLD START+SELECT", 1)) / 2,
-			  151, "HOLD START+SELECT", 1, 0x00f4f4e8);
+			  228, "HOLD START+SELECT", 1, 0x00f4f4e8);
 		if (pwrite(framebuffer, lcd_pixels,
 			   (size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(*lcd_pixels), 0) < 0) {
 			perror("write GamePup framebuffer");

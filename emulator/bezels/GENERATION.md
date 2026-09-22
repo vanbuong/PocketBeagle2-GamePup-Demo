@@ -2,7 +2,8 @@
 
 The `SYSTEM` bezel uses two purpose-built images generated with OpenAI's
 built-in image-generation tool on July 25, 2026. The final runtime assets are
-exactly 128x40 RGB888: a 128x20 top band followed by a 128x20 bottom band.
+exactly 320x40 RGB888: a 320x20 top band followed by a 320x20 bottom band,
+matching the ILI9341 landscape framebuffer width.
 
 ## NES prompt
 
@@ -41,8 +42,8 @@ geometric accents. The top band must say `NINTENDO 64`; the bottom must say
 margins, and no characters or game screenshot.
 
 The complete production prompts also specified a crisp polished 2D raster
-style, a 16:5 overall composition, high legibility after heavy downscaling, and
-no other words, screenshots, perspective, or watermark.
+style, a 16:1 overall composition for each band, high legibility after heavy
+downscaling, and no other words, screenshots, perspective, or watermark.
 
 To the extent copyright or similar rights apply, the source and runtime assets
 are offered under GPL-2.0-only with the rest of this repository.
