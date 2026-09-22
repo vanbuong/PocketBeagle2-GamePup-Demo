@@ -76,6 +76,8 @@ if id "$DEVICE_USER" >/dev/null 2>&1; then
 fi
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=spidev
+udevadm trigger --subsystem-match=i2c-dev
+udevadm trigger --subsystem-match=input
 
 install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/local/sbin
 # Khronos headers are vendored under emulator/khronos so we never need Mesa
