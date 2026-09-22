@@ -111,10 +111,10 @@ because compiling it directly on the board is slow and memory-intensive.
 
 ## Manual installation
 
-The installed Armbian vendor kernel has the DRM ILI9341 driver disabled, so
-`install.sh` builds the two required matching upstream Linux modules against
-the installed Armbian headers, installs the overlay, and adds it to
-`/boot/extlinux/extlinux.conf`.
+On BeagleBoard PocketBeagle 2 Debian 13.7 IoT (`v6.18.x-k3`), the stock kernel
+leaves the DRM ILI9341 driver disabled, so `install.sh` builds the two required
+matching upstream Linux modules against the installed headers, installs the
+overlay, and adds it to `/boot/extlinux/extlinux.conf`.
 
 ```sh
 sudo ./emulator/install-cores.sh
@@ -124,6 +124,26 @@ sudo reboot
 
 The installer saves the original boot configuration as
 `/boot/extlinux/extlinux.conf.before-gamepup-a4`.
+
+## Cross-compile CI (host → aarch64)
+
+GitHub Actions cross-compiles the overlay, userspace apps, libretro cores, and
+ILI9341 DRM modules for **PocketBeagle 2 Debian 13.7 2026-09-20 IoT
+(v6.18.x-k3)**. Target pins live in [`ci/target.env`](ci/target.env).
+
+Locally on an amd64 Linux host:
+
+```sh
+sudo apt-get install -y gcc-14-aarch64-linux-gnu g++-14-aarch64-linux-gnu \
+  device-tree-compiler qemu-user-static git curl
+# also install Ubuntu ports arm64 -dev packages for EGL/GLES/gif (see workflow)
+./scripts/cross-build.sh
+sudo ./scripts/install-dist.sh ./dist   # on the PocketBeagle 2
+```
+
+Artifacts land in `dist/` (`bin/`, `libretro/`, `modules/`, `dtbo/`). Optional
+`BUILD_N64=1` also builds the Nintendo 64 core. Download CI zips from the
+**Cross compile (PocketBeagle 2)** workflow run.
 
 ## Devices after reboot
 

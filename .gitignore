@@ -18,6 +18,8 @@ emulator/build/
 emulator/gamepup-retro
 emulator/gamepup-oled-status
 emulator/gamepup-gpu-bench
+dist/
+.cross-build/
 *.o
 *.so
 *.ko
