@@ -406,9 +406,12 @@ launching a game has a confirmation sound, and returning from a game has a
 descending back sound. These interface sounds also obey the mute setting.
 
 The service temporarily unbinds the Linux framebuffer console while it is
-active. This prevents tty1/getty cursor and keyboard updates from repainting
-over the menu or game. Stopping the service reattaches the framebuffer console;
-SSH and the serial console are unaffected throughout.
+active and exclusively grabs the GamePup button input device. This prevents
+tty1/getty cursor and keyboard updates (for example raw `^[[A` / `^[[B` arrow
+escape sequences) from painting over the menu or game. Stopping the service
+reattaches the framebuffer console; SSH and the serial console are unaffected
+throughout. If you launch the menu by hand, run
+`sudo /usr/local/libexec/gamepup-fbcon detach` first.
 
 ## Hardware tester
 

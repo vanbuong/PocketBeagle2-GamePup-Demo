@@ -34,7 +34,8 @@
 #define RENDER_WIDTH (LCD_WIDTH * RENDER_SCALE)
 #define RENDER_HEIGHT (LCD_HEIGHT * RENDER_SCALE)
 #define FRAMEBUFFER "/dev/fb0"
-#define INPUT_DEVICE "/dev/input/event0"
+#define INPUT_DEVICE "/dev/input/by-path/platform-gamepup-buttons-event"
+#define INPUT_FALLBACK "/dev/input/event0"
 #define FPS_FILE "/run/gamepup/fps"
 #define EXIT_HOLD_SECONDS 0.8
 #define FILL_LAYERS 48
@@ -567,10 +568,14 @@ int main(int argc, char **argv)
 	signal(SIGTERM, stop_handler);
 	framebuffer = open(FRAMEBUFFER, O_RDWR | O_CLOEXEC);
 	input_fd = open(INPUT_DEVICE, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (input_fd < 0)
+		input_fd = open(INPUT_FALLBACK, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (framebuffer < 0 || input_fd < 0) {
 		perror("open GamePup devices");
 		goto cleanup;
 	}
+	if (ioctl(input_fd, EVIOCGRAB, 1) < 0)
+		perror("EVIOCGRAB buttons");
 	display = open_egl_display();
 	if (display == EGL_NO_DISPLAY || !eglInitialize(display, NULL, NULL) ||
 	    !eglBindAPI(EGL_OPENGL_ES_API) ||

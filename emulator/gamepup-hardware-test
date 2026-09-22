@@ -25,6 +25,7 @@ EVENT = struct.Struct("@llHHi")
 EV_KEY = 1
 EV_SND = 0x12
 SND_TONE = 2
+EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
 
 KEY_ESC = 1
 KEY_1 = 2
@@ -255,6 +256,10 @@ def run_test(self_test_only: bool = False) -> int:
             return 0
 
         input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            fcntl.ioctl(input_fd, EVIOCGRAB, 1)
+        except OSError as error:
+            print(f"Unable to grab buttons: {error}", file=sys.stderr)
         pressed: set[int] = set()
         tested: set[int] = set()
         frequency = 880

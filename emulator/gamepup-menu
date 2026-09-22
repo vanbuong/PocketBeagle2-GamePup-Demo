@@ -18,8 +18,10 @@ import time
 WIDTH = 320
 HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
-INPUT = "/dev/input/event0"
+INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
+INPUT_FALLBACK = "/dev/input/event0"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
+FBCON = "/usr/local/libexec/gamepup-fbcon"
 FRONTEND = "/usr/local/bin/gamepup-retro"
 GPU_BENCHMARK = "/usr/local/bin/gamepup-gpu-bench"
 HARDWARE_TEST = "/usr/local/bin/gamepup-hardware-test"
@@ -75,6 +77,7 @@ KEY_RIGHT = 106
 KEY_UP = 103
 KEY_DOWN = 108
 EVENT = struct.Struct("@llHHi")
+EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
 
 BLACK = 0x000000
 WHITE = 0xF4F4E8
@@ -630,6 +633,34 @@ def toggle_setting(path: Path):
         print(f"Unable to change {path.name}: {error}", file=sys.stderr)
 
 
+def claim_display() -> None:
+    """Keep Linux fbcon/TTY from painting over the GamePup framebuffer."""
+    for command in (
+        ["sudo", "-n", FBCON, "detach"],
+        [FBCON, "detach"],
+    ):
+        try:
+            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            continue
+
+
+def open_buttons() -> int:
+    for path in (INPUT, INPUT_FALLBACK):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            fcntl.ioctl(fd, EVIOCGRAB, 1)
+        except OSError as error:
+            print(f"Unable to grab {path}: {error}", file=sys.stderr)
+        return fd
+    raise OSError(f"Unable to open GamePup buttons ({INPUT})")
+
+
 def run_menu(games: list[Path]) -> int:
     screen = "home"
     import_status_time = modification_time(ROM_IMPORT_STATUS)
@@ -644,8 +675,9 @@ def run_menu(games: list[Path]) -> int:
         "second": 0,
         "about": 0,
     }
+    claim_display()
     framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-    input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    input_fd = open_buttons()
 
     try:
         draw_menu(framebuffer, games, screen, selected[screen])
@@ -709,7 +741,8 @@ def run_menu(games: list[Path]) -> int:
                             if not running:
                                 return 0
                             framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                            input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                            claim_display()
+                            input_fd = open_buttons()
                             wait_for_launch_keys_to_release(input_fd)
                             games[:] = installed_games()
                             screen = "home"
@@ -736,7 +769,8 @@ def run_menu(games: list[Path]) -> int:
                         if not running:
                             return 0
                         framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                        claim_display()
+                        input_fd = open_buttons()
                         wait_for_launch_keys_to_release(input_fd)
                         games[:] = installed_games()
                         selected[screen] = read_selected_index(platform_games(games, screen))
@@ -756,7 +790,8 @@ def run_menu(games: list[Path]) -> int:
                         if not running:
                             return 0
                         framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                        claim_display()
+                        input_fd = open_buttons()
                         wait_for_launch_keys_to_release(input_fd)
                         draw_menu(framebuffer, games, screen, selected[screen])
                         break
@@ -774,7 +809,8 @@ def run_menu(games: list[Path]) -> int:
                             if not running:
                                 return 0
                             framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                            input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                            claim_display()
+                            input_fd = open_buttons()
                             wait_for_launch_keys_to_release(input_fd)
                             draw_menu(framebuffer, games, screen, selected[screen])
                             break

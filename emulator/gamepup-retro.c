@@ -33,7 +33,7 @@
 #include "libretro.h"
 
 #define DEFAULT_CORE "/usr/local/lib/libretro/gambatte_libretro.so"
-#define DEFAULT_INPUT "/dev/input/event0"
+#define DEFAULT_INPUT "/dev/input/by-path/platform-gamepup-buttons-event"
 #define DEFAULT_FB "/dev/fb0"
 #define DEFAULT_BUZZER "/dev/input/by-path/platform-gamepup-buzzer-event"
 #define SYSTEM_DIR "/opt/gamepup/system"
@@ -1360,6 +1360,8 @@ static void open_devices(const char *framebuffer_path, const char *input_path)
 		perror(input_path);
 		exit(EXIT_FAILURE);
 	}
+	if (ioctl(input_fd, EVIOCGRAB, 1) < 0)
+		perror("EVIOCGRAB buttons");
 
 	audio_muted = access(MUTE_FILE, F_OK) == 0;
 	bezel_style = read_bezel_style();
