@@ -6,11 +6,6 @@ on:
     branches: [main, 'cursor/**']
   pull_request:
   workflow_dispatch:
-    inputs:
-      build_n64:
-        description: Also cross-compile the Nintendo 64 libretro core
-        type: boolean
-        default: false
 
 concurrency:
   group: cross-compile-${{ github.workflow }}-${{ github.ref }}
@@ -20,7 +15,7 @@ jobs:
   cross-compile:
     name: aarch64 for Debian 13.7 IoT (v6.18.x-k3)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -60,18 +55,14 @@ jobs:
             qemu-user-static \
             xz-utils
 
-      - name: Cross-compile everything
+      - name: Cross-compile everything (including N64)
         env:
           BUILD_JOBS: "4"
+          BUILD_N64: "1"
         run: |
           set -eux
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
-             [ "${{ inputs.build_n64 }}" = "true" ]; then
-            export BUILD_N64=1
-          else
-            export BUILD_N64=0
-          fi
-          chmod +x scripts/cross-build.sh scripts/install-dist.sh
+          chmod +x scripts/cross-build.sh scripts/install-dist.sh \
+            scripts/install-artifacts.sh
           ./scripts/cross-build.sh
 
       - name: Verify aarch64 artifacts
@@ -85,6 +76,7 @@ jobs:
           file dist/libretro/nestopia_libretro.so | grep -q 'ARM aarch64'
           file dist/libretro/gambatte_libretro.so | grep -q 'ARM aarch64'
           file dist/libretro/prboom_libretro.so | grep -q 'ARM aarch64'
+          file dist/libretro/mupen64plus_next_libretro.so | grep -q 'ARM aarch64'
           test -f dist/dtbo/k3-am6232-pocketbeagle2-gamepup-a4.dtbo
           test -f dist/modules/KERNEL_VERSION.txt
           cat dist/MANIFEST.txt

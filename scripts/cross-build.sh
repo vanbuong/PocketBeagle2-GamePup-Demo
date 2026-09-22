@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./scripts/cross-build.sh
-#   BUILD_N64=1 ./scripts/cross-build.sh
+#   SKIP_N64=1 ./scripts/cross-build.sh
 #   SKIP_MODULES=1 ./scripts/cross-build.sh
 
 set -eu
@@ -18,7 +18,9 @@ ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 . "$ROOT_DIR/ci/target.env"
 
 BUILD_JOBS=${BUILD_JOBS:-$(nproc 2>/dev/null || echo 2)}
-BUILD_N64=${BUILD_N64:-0}
+# BUILD_N64 defaults on; SKIP_N64=1 disables it. BUILD_N64=0 also disables.
+BUILD_N64=${BUILD_N64:-1}
+SKIP_N64=${SKIP_N64:-0}
 SKIP_MODULES=${SKIP_MODULES:-0}
 SKIP_CORES=${SKIP_CORES:-0}
 DIST_DIR=${DIST_DIR:-$ROOT_DIR/dist}
@@ -232,7 +234,7 @@ build_cores() {
 }
 
 build_n64() {
-	log "Cross-compiling Nintendo 64 core (optional)"
+	log "Cross-compiling Nintendo 64 core"
 	mkdir -p "$DIST_DIR/libretro"
 	n64_dir=$WORK_DIR/n64
 	rm -rf "$n64_dir"
@@ -327,7 +329,7 @@ main() {
 	if [ "$SKIP_CORES" != 1 ]; then
 		build_cores
 	fi
-	if [ "$BUILD_N64" = 1 ]; then
+	if [ "$SKIP_N64" != 1 ] && [ "$BUILD_N64" = 1 ]; then
 		build_n64
 	fi
 	if [ "$SKIP_MODULES" != 1 ]; then

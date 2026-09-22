@@ -153,9 +153,10 @@ For a full artifact install including modules and overlay:
 sudo ./scripts/install-dist.sh ./dist
 ```
 
-Artifacts land in `dist/` (`bin/`, `libretro/`, `modules/`, `dtbo/`). Optional
-`BUILD_N64=1` also builds the Nintendo 64 core. Download CI zips from the
-**Cross compile (PocketBeagle 2)** workflow run.
+Artifacts land in `dist/` (`bin/`, `libretro/` including Nestopia, Gambatte,
+PrBoom, and Mupen64Plus-Next, `modules/`, `dtbo/`). Set `SKIP_N64=1` to omit
+the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
+2)** workflow run.
 
 ## Devices after reboot
 
