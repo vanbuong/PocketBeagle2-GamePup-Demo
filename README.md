@@ -138,7 +138,19 @@ sudo apt-get install -y gcc-14-aarch64-linux-gnu g++-14-aarch64-linux-gnu \
   device-tree-compiler qemu-user-static git curl
 # also install Ubuntu ports arm64 -dev packages for EGL/GLES/gif (see workflow)
 ./scripts/cross-build.sh
-sudo ./scripts/install-dist.sh ./dist   # on the PocketBeagle 2
+```
+
+On the PocketBeagle 2, install the userspace/CI artifact tree (bins, cores,
+bezels; **skips** modules and dtbo):
+
+```sh
+sudo ./scripts/install-artifacts.sh ./dist
+```
+
+For a full artifact install including modules and overlay:
+
+```sh
+sudo ./scripts/install-dist.sh ./dist
 ```
 
 Artifacts land in `dist/` (`bin/`, `libretro/`, `modules/`, `dtbo/`). Optional
