@@ -379,7 +379,8 @@ screen. While playing, hold Start+Select for about one second to save, exit, and
 return to the current game folder (or directly to the home screen from Doom).
 
 Settings provides persistent toggles for all sound and menu beeps, an eight-step
-hardware-PWM backlight slider adjusted with D-pad Left/Right, plus an
+hardware-PWM backlight slider adjusted with D-pad Left/Right (sysfs path
+`backlight-gamepup` or `lcd-backlight`), plus an
 `EXIT TO TTY` action that stops the launcher and restores the Linux framebuffer
 console. Muted games do not open the PWM buzzer device.
 
