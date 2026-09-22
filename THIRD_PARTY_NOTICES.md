@@ -37,7 +37,7 @@ beside the assets.
 | [giflib](https://giflib.sourceforge.net/) | Decodes optional OLED GIF animations | MIT-style license; supplied by the OS, not bundled |
 | [Armbian build](https://github.com/armbian/build) | Source of the TI package-priority configuration referenced by `install-gpu.sh` | GPL-2.0 |
 | [TI Debian packages](https://github.com/TexasInstruments/ti-debpkgs) | AM62 PowerVR kernel driver, userspace, tools, firmware, and Mesa integration | Not bundled. Package-specific TI, Imagination, MIT, and/or GPL terms apply; inspect the installed package copyright files and TI repository before redistribution |
-| Ubuntu/Debian `doom-wad-shareware` | Optional `doom1.wad` installed by `install-doom.sh` | Copyright id Software; governed by the Doom shareware data license, not this project's GPL |
+| Ubuntu/Debian `doom-wad-shareware` | Optional `doom1.wad` installed by `install-doom.sh`, `install-artifacts.sh`, and `install-dist.sh` | Copyright id Software; governed by the Doom shareware data license, not this project's GPL |
 
 The scripts identify pinned core commits where reproducibility matters, but a
 pin is not a license grant. Preserve upstream notices when distributing the

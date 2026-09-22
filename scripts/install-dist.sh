@@ -34,7 +34,9 @@ if [ -f "$DIST_DIR/modules/KERNEL_VERSION.txt" ]; then
 fi
 
 install -d -m 0755 /usr/local/bin /usr/local/include /usr/local/lib/libretro \
-	/usr/local/share/gamepup/bezels /opt/gamepup/gifs "$MODULE_INSTALL_DIR"
+	/usr/local/share/gamepup/bezels /opt/gamepup/gifs /opt/gamepup/saves \
+	/opt/gamepup/games/nes /opt/gamepup/games/gbc /opt/gamepup/games/n64 \
+	/opt/gamepup/games/doom "$MODULE_INSTALL_DIR"
 
 install -m 0755 "$DIST_DIR/bin/"* /usr/local/bin/
 if [ -f "$DIST_DIR/include/libretro.h" ]; then
@@ -50,6 +52,15 @@ fi
 if [ -d "$DIST_DIR/share/gifs" ]; then
 	install -m 0644 "$DIST_DIR/share/gifs/"*.gif /opt/gamepup/gifs/ 2>/dev/null || true
 fi
+
+# Doom shareware WAD (same as emulator/install-doom.sh)
+if [ ! -f /usr/share/games/doom/doom1.wad ]; then
+	export DEBIAN_FRONTEND=noninteractive
+	apt-get update -qq
+	apt-get install -y --no-install-recommends doom-wad-shareware
+fi
+install -m 0644 /usr/share/games/doom/doom1.wad \
+	"/opt/gamepup/games/doom/Doom Shareware.wad"
 
 if [ -d "$DIST_DIR/modules" ]; then
 	install -m 0644 "$DIST_DIR/modules/"*.ko "$MODULE_INSTALL_DIR/"
@@ -71,8 +82,12 @@ if [ -f "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" ]; then
 fi
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then
-	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs 2>/dev/null || true
+	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
+		/opt/gamepup/games 2>/dev/null || true
+	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/games/doom \
+		"/opt/gamepup/games/doom/Doom Shareware.wad"
 fi
 
 echo "Installed cross-build artifacts from $DIST_DIR."
+echo "Doom Shareware WAD: /opt/gamepup/games/doom/Doom Shareware.wad"
 echo "Reboot to apply the device-tree overlay if it was newly added."

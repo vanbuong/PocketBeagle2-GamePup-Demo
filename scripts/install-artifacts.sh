@@ -24,7 +24,9 @@ DEVICE_USER=${DEVICE_USER:-beagle}
 }
 
 install -d -m 0755 /usr/local/bin /usr/local/include /usr/local/lib/libretro \
-	/usr/local/share/gamepup/bezels /opt/gamepup/gifs /opt/gamepup/saves
+	/usr/local/share/gamepup/bezels /opt/gamepup/gifs /opt/gamepup/saves \
+	/opt/gamepup/games/nes /opt/gamepup/games/gbc /opt/gamepup/games/n64 \
+	/opt/gamepup/games/doom
 
 install -m 0755 "$DIST_DIR/bin/"* /usr/local/bin/
 
@@ -45,9 +47,21 @@ if [ -d "$DIST_DIR/share/gifs" ]; then
 	install -m 0644 "$DIST_DIR/share/gifs/"*.gif /opt/gamepup/gifs/ 2>/dev/null || true
 fi
 
+# Doom shareware WAD (same as emulator/install-doom.sh)
+if [ ! -f /usr/share/games/doom/doom1.wad ]; then
+	export DEBIAN_FRONTEND=noninteractive
+	apt-get update -qq
+	apt-get install -y --no-install-recommends doom-wad-shareware
+fi
+install -m 0644 /usr/share/games/doom/doom1.wad \
+	"/opt/gamepup/games/doom/Doom Shareware.wad"
+
 if id "$DEVICE_USER" >/dev/null 2>&1; then
 	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
+		/opt/gamepup/games \
 		2>/dev/null || true
+	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/games/doom \
+		"/opt/gamepup/games/doom/Doom Shareware.wad"
 fi
 
 echo "Installed userspace artifacts from $DIST_DIR:"
@@ -55,4 +69,5 @@ echo "  /usr/local/bin          (menu, retro, gpu-bench, hardware-test, ...)"
 echo "  /usr/local/lib/libretro (cores, if present)"
 echo "  /usr/local/share/gamepup/bezels"
 echo "  /opt/gamepup/gifs"
+echo "  /opt/gamepup/games/doom/Doom Shareware.wad"
 echo "Skipped: kernel modules and device-tree overlay."

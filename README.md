@@ -153,6 +153,10 @@ For a full artifact install including modules and overlay:
 sudo ./scripts/install-dist.sh ./dist
 ```
 
+Both installers also create `/opt/gamepup/games/{nes,gbc,n64,doom}` and install
+Doom Shareware from the `doom-wad-shareware` package to
+`/opt/gamepup/games/doom/Doom Shareware.wad` (same as `emulator/install-doom.sh`).
+
 Artifacts land in `dist/` (`bin/`, `libretro/` including Nestopia, Gambatte,
 PrBoom, and Mupen64Plus-Next, `modules/`, `dtbo/`). Set `SKIP_N64=1` to omit
 the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
