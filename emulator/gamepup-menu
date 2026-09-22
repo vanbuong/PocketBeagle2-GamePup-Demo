@@ -22,6 +22,7 @@ INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 INPUT_FALLBACK = "/dev/input/event0"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
 FBCON = "/usr/local/libexec/gamepup-fbcon"
+BACKLIGHT_PERMISSIONS = "/usr/local/libexec/gamepup-backlight-permissions"
 FRONTEND = "/usr/local/bin/gamepup-retro"
 GPU_BENCHMARK = "/usr/local/bin/gamepup-gpu-bench"
 HARDWARE_TEST = "/usr/local/bin/gamepup-hardware-test"
@@ -51,7 +52,10 @@ OLED_GIF_MODE_FILE = Path("/opt/gamepup/saves/oled-gif-mode")
 OLED_GIF_SELECTION_FILE = Path("/opt/gamepup/saves/oled-gif-selection")
 OLED_GIF_ROOT = Path("/opt/gamepup/gifs")
 FPS_FILE = Path("/run/gamepup/fps")
-BACKLIGHT = Path("/sys/class/backlight/backlight-gamepup/brightness")
+BACKLIGHT_CANDIDATES = (
+    Path("/sys/class/backlight/backlight-gamepup/brightness"),
+    Path("/sys/class/backlight/lcd-backlight/brightness"),
+)
 BRIGHTNESS_LEVELS = tuple(range(4, 12))
 OLED_BRIGHTNESS_LEVELS = tuple(range(1, 9))
 OLED_REFRESH_LEVELS = (5, 10, 15, 20, 25, 30)
@@ -78,6 +82,8 @@ KEY_UP = 103
 KEY_DOWN = 108
 EVENT = struct.Struct("@llHHi")
 EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
 
 BLACK = 0x000000
 WHITE = 0xF4F4E8
@@ -87,6 +93,98 @@ YELLOW = 0xF4D35E
 BLUE = 0x174A70
 GRAY = 0x708078
 RED = 0xE85D5D
+
+_fb_info: dict | None = None
+_backlight_path: Path | None = None
+
+
+def backlight_path() -> Path | None:
+    global _backlight_path
+    if _backlight_path is not None:
+        return _backlight_path if _backlight_path.parts else None
+    for candidate in BACKLIGHT_CANDIDATES:
+        if candidate.exists():
+            _backlight_path = candidate
+            return candidate
+    root = Path("/sys/class/backlight")
+    if root.is_dir():
+        for directory in sorted(root.iterdir()):
+            candidate = directory / "brightness"
+            if candidate.exists():
+                _backlight_path = candidate
+                return candidate
+    _backlight_path = Path()
+    return None
+
+
+def grant_backlight_access() -> None:
+    for command in (
+        ["sudo", "-n", BACKLIGHT_PERMISSIONS, "grant"],
+        [BACKLIGHT_PERMISSIONS, "grant"],
+    ):
+        try:
+            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            continue
+
+
+def read_fb_info(framebuffer: int) -> dict:
+    global _fb_info
+    if _fb_info is not None:
+        return _fb_info
+    # struct fb_var_screeninfo: first two u32 are xres, yres; bits_per_pixel at offset 24
+    var = array("B", [0]) * 160
+    fix = array("B", [0]) * 128
+    fcntl.ioctl(framebuffer, FBIOGET_VSCREENINFO, var, True)
+    fcntl.ioctl(framebuffer, FBIOGET_FSCREENINFO, fix, True)
+    xres = int.from_bytes(var[0:4], "little")
+    yres = int.from_bytes(var[4:8], "little")
+    bpp = int.from_bytes(var[24:28], "little")
+    # line_length is at offset 48 in fb_fix_screeninfo on 64-bit (after id[16], smem_start)
+    # Portable approach: read sysfs when available.
+    stride = 0
+    try:
+        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+    except (OSError, ValueError):
+        stride = xres * (bpp // 8)
+    if bpp != 32:
+        raise OSError(f"Expected 32-bit framebuffer, got {bpp} bpp")
+    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+        raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
+    print(f"GamePup framebuffer {xres}x{yres} stride={stride}", file=sys.stderr)
+    return _fb_info
+
+
+def present_canvas(framebuffer: int, canvas: array) -> None:
+    info = read_fb_info(framebuffer)
+    stride = info["stride"]
+    height = info["height"]
+    width = info["width"]
+    frame = bytearray(stride * height)
+    if width == WIDTH and height == HEIGHT:
+        row_bytes = WIDTH * 4
+        src = canvas.tobytes()
+        for y in range(HEIGHT):
+            start = y * stride
+            src_off = y * row_bytes
+            frame[start:start + row_bytes] = src[src_off:src_off + row_bytes]
+    else:
+        # Portrait 240x320: rotate landscape canvas 90° CCW.
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                dst_x = y
+                dst_y = WIDTH - 1 - x
+                pixel = int(src[y * WIDTH + x]).to_bytes(4, "little")
+                offset = dst_y * stride + dst_x * 4
+                frame[offset:offset + 4] = pixel
+    view = memoryview(frame)
+    written = 0
+    while written < len(frame):
+        written += os.pwrite(framebuffer, view[written:], written)
 
 FONT = {
     " ": ("00000",) * 7,
@@ -267,7 +365,7 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         draw_text(canvas, 16, 192, "@GRIPPY98", GREEN)
         fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
         draw_text(canvas, 8, 228, "B:BACK", GRAY)
-        os.pwrite(framebuffer, canvas.tobytes(), 0)
+        present_canvas(framebuffer, canvas)
         return
 
     items = menu_items(games, screen)
@@ -319,7 +417,7 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         footer, footer_color = "B:BACK", GRAY
     draw_text(canvas, 8, 228, footer, footer_color)
     draw_text(canvas, WIDTH - len(page) * 6 - 6, 228, page, YELLOW)
-    os.pwrite(framebuffer, canvas.tobytes(), 0)
+    present_canvas(framebuffer, canvas)
 
 
 def read_selected_index(games: list[Path]) -> int:
@@ -433,7 +531,7 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
     fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
     draw_text(canvas, 8, 228, "B BACK", GRAY)
     draw_text(canvas, 200, 228, "A IMPORT", GREEN)
-    os.pwrite(framebuffer, canvas.tobytes(), 0)
+    present_canvas(framebuffer, canvas)
 
 
 def silence_buzzer():
@@ -489,7 +587,11 @@ def toggle_menu_beeps():
 
 
 def brightness_level() -> int:
-    for source in (BRIGHTNESS_FILE, BACKLIGHT):
+    sources = [BRIGHTNESS_FILE]
+    path = backlight_path()
+    if path is not None:
+        sources.append(path)
+    for source in sources:
         try:
             return int(source.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
@@ -505,8 +607,11 @@ def normalized_brightness_level() -> int:
 def apply_saved_brightness():
     if not BRIGHTNESS_FILE.exists():
         return
+    path = backlight_path()
+    if path is None:
+        return
     try:
-        BACKLIGHT.write_text(f"{brightness_level()}\n", encoding="utf-8")
+        path.write_text(f"{brightness_level()}\n", encoding="utf-8")
     except OSError as error:
         print(f"Unable to restore backlight brightness: {error}", file=sys.stderr)
 
@@ -518,8 +623,12 @@ def adjust_brightness(direction: int) -> bool:
     if new_position == position:
         return False
     level = BRIGHTNESS_LEVELS[new_position]
+    path = backlight_path()
+    if path is None:
+        print("No backlight sysfs node found.", file=sys.stderr)
+        return False
     try:
-        BACKLIGHT.write_text(f"{level}\n", encoding="utf-8")
+        path.write_text(f"{level}\n", encoding="utf-8")
         BRIGHTNESS_FILE.write_text(f"{level}\n", encoding="utf-8")
     except OSError as error:
         print(f"Unable to change backlight brightness: {error}", file=sys.stderr)
@@ -635,6 +744,7 @@ def toggle_setting(path: Path):
 
 def claim_display() -> None:
     """Keep Linux fbcon/TTY from painting over the GamePup framebuffer."""
+    grant_backlight_access()
     for command in (
         ["sudo", "-n", FBCON, "detach"],
         [FBCON, "detach"],

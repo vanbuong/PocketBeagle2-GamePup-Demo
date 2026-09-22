@@ -15,6 +15,7 @@
 #include <GLES2/gl2.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fb.h>
 #include <linux/input.h>
 #include <math.h>
 #include <signal.h>
@@ -43,6 +44,12 @@
 #define GEAR_SEGMENTS 80
 
 static volatile sig_atomic_t keep_running = 1;
+static unsigned fb_width;
+static unsigned fb_height;
+static unsigned fb_bpp;
+static unsigned fb_stride;
+static size_t fb_frame_size;
+static uint8_t *fb_frame;
 
 enum benchmark_kind {
 	BENCHMARK_PLASMA,
@@ -265,6 +272,90 @@ static void draw_text(uint32_t *pixels, int x, int y, const char *text,
 				if (glyph[row] & (1u << (4 - column)))
 					fill_rect(pixels, x + column * scale,
 						  y + row * scale, scale, scale, color);
+	}
+}
+
+static bool open_framebuffer(int *framebuffer_fd)
+{
+	struct fb_var_screeninfo variable;
+	struct fb_fix_screeninfo fixed;
+	int fd = open(FRAMEBUFFER, O_RDWR | O_CLOEXEC);
+
+	if (fd < 0 || ioctl(fd, FBIOGET_VSCREENINFO, &variable) < 0 ||
+	    ioctl(fd, FBIOGET_FSCREENINFO, &fixed) < 0) {
+		perror(FRAMEBUFFER);
+		if (fd >= 0)
+			close(fd);
+		return false;
+	}
+	fb_width = variable.xres;
+	fb_height = variable.yres;
+	fb_bpp = variable.bits_per_pixel;
+	fb_stride = fixed.line_length;
+	if (fb_bpp != 32) {
+		fprintf(stderr, "Expected a 32-bit framebuffer, got %u bpp\n", fb_bpp);
+		close(fd);
+		return false;
+	}
+	if (!((fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT) ||
+	      (fb_width == LCD_HEIGHT && fb_height == LCD_WIDTH))) {
+		fprintf(stderr,
+			"Unsupported framebuffer %ux%u (need 320x240 or 240x320)\n",
+			fb_width, fb_height);
+		close(fd);
+		return false;
+	}
+	fb_frame_size = (size_t)fb_stride * fb_height;
+	fb_frame = calloc(1, fb_frame_size);
+	if (!fb_frame) {
+		perror("calloc framebuffer");
+		close(fd);
+		return false;
+	}
+	fprintf(stderr, "GamePup framebuffer %ux%u stride=%u\n",
+		fb_width, fb_height, fb_stride);
+	*framebuffer_fd = fd;
+	return true;
+}
+
+/* Present a logical 320x240 XRGB canvas into the real /dev/fb0 geometry. */
+static void present_canvas(int framebuffer_fd, const uint32_t *canvas)
+{
+	size_t written = 0;
+
+	if (fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT) {
+		for (unsigned y = 0; y < fb_height; ++y) {
+			uint32_t *row = (uint32_t *)(fb_frame + y * fb_stride);
+
+			memcpy(row, canvas + y * LCD_WIDTH,
+			       (size_t)LCD_WIDTH * sizeof(*canvas));
+		}
+	} else {
+		/* Portrait FB 240x320: rotate landscape canvas 90° CCW. */
+		for (int y = 0; y < LCD_HEIGHT; ++y) {
+			for (int x = 0; x < LCD_WIDTH; ++x) {
+				int dst_x = y;
+				int dst_y = LCD_WIDTH - 1 - x;
+				uint32_t *row = (uint32_t *)(fb_frame +
+							     (size_t)dst_y * fb_stride);
+
+				row[dst_x] = canvas[y * LCD_WIDTH + x];
+			}
+		}
+	}
+
+	while (written < fb_frame_size) {
+		ssize_t result = pwrite(framebuffer_fd, fb_frame + written,
+					fb_frame_size - written, (off_t)written);
+
+		if (result < 0 && errno == EINTR)
+			continue;
+		if (result <= 0) {
+			perror("pwrite framebuffer");
+			keep_running = 0;
+			return;
+		}
+		written += (size_t)result;
 	}
 }
 
@@ -511,8 +602,8 @@ static void show_error(int framebuffer, const char *message)
 	draw_text(pixels, 7, 40, "GPU ERROR", 2, red);
 	draw_text(pixels, 4, 72, message, 1, white);
 	draw_text(pixels, 7, 142, "RETURNING TO MENU", 1, white);
-	if (pwrite(framebuffer, pixels, sizeof(pixels), 0) < 0)
-		perror("write GPU error screen");
+	if (fb_frame)
+		present_canvas(framebuffer, pixels);
 	sleep(3);
 }
 
@@ -566,12 +657,13 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, stop_handler);
 	signal(SIGTERM, stop_handler);
-	framebuffer = open(FRAMEBUFFER, O_RDWR | O_CLOEXEC);
+	if (!open_framebuffer(&framebuffer))
+		goto cleanup;
 	input_fd = open(INPUT_DEVICE, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (input_fd < 0)
 		input_fd = open(INPUT_FALLBACK, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-	if (framebuffer < 0 || input_fd < 0) {
-		perror("open GamePup devices");
+	if (input_fd < 0) {
+		perror("open GamePup buttons");
 		goto cleanup;
 	}
 	if (ioctl(input_fd, EVIOCGRAB, 1) < 0)
@@ -700,6 +792,7 @@ int main(int argc, char **argv)
 		} else {
 			glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 		}
+		glFinish();
 		glReadPixels(0, 0, RENDER_WIDTH, RENDER_HEIGHT,
 			     GL_RGBA, GL_UNSIGNED_BYTE, rendered_pixels);
 
@@ -728,11 +821,9 @@ int main(int argc, char **argv)
 		draw_text(lcd_pixels,
 			  (LCD_WIDTH - text_width("HOLD START+SELECT", 1)) / 2,
 			  228, "HOLD START+SELECT", 1, 0x00f4f4e8);
-		if (pwrite(framebuffer, lcd_pixels,
-			   (size_t)LCD_WIDTH * LCD_HEIGHT * sizeof(*lcd_pixels), 0) < 0) {
-			perror("write GamePup framebuffer");
+		present_canvas(framebuffer, lcd_pixels);
+		if (!keep_running)
 			break;
-		}
 
 		++frames;
 		now = monotonic_seconds();
@@ -751,6 +842,8 @@ cleanup:
 	free(triangle_vertices);
 	free(lcd_pixels);
 	free(rendered_pixels);
+	free(fb_frame);
+	fb_frame = NULL;
 	if (program)
 		glDeleteProgram(program);
 	if (display != EGL_NO_DISPLAY) {
