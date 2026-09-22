@@ -3,7 +3,7 @@
 An open-source PocketBeagle 2 port and tiny framebuffer game launcher for the
 GamePup A4 cape. It combines native cape support, a controller-first game menu,
 libretro emulation, PowerVR demonstrations, a USB ROM inbox, hardware tests,
-and an optional 96x96 OLED dashboard.
+and an optional 128x64 SH1106 OLED dashboard with EC11 encoder.
 
 > **Development note:** this project was created by
 > [@Grippy98](https://github.com/Grippy98) with AI-assisted implementation and
@@ -18,7 +18,7 @@ This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 - both eye LEDs;
 - PWM buzzer;
 - the Click socket's SPI device (`spidev`);
-- OLED C Click control pins and a 96x96 system-status dashboard;
+- SH1106 1.3" I2C OLED status dashboard and EC11 encoder on the Click socket;
 - a safe FAT32 USB ROM inbox alongside USB networking and serial;
 - the cape EEPROM (`at24` on I2C2).
 
@@ -73,8 +73,10 @@ for black bands or the optional bezel.
 | Doom | normally 320x200 from PrBoom | 320x240, corrected to 4:3 | none (fills height) |
 | PowerVR benchmarks | 320x240 OpenGL ES pbuffer | 320x240 | none |
 
-The optional OLED C Click is a separate **96x96 RGB565** display. Both its
-status dashboard and GIF mode render at 96x96; it does not mirror the main LCD.
+The optional second screen is a **128x64 SH1106** mono OLED on I2C2. Both its
+status dashboard and GIF mode render at 128x64; it does not mirror the main LCD.
+The EC11 encoder on the Click control pins adjusts brightness and toggles GIF
+mode.
 
 ## One-command install
 
@@ -167,7 +169,10 @@ the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
 - display: `/dev/dri/card*` and usually `/dev/fb0`;
 - buttons: `/dev/input/by-path/*gamepup*` or the event device named
   `gamepup-buttons`/`gpio-keys`;
-- Click SPI: `/dev/spidev0.0`;
+- Click SPI: `/dev/spidev0.0` (available for other Click boards);
+- SH1106 OLED: `/dev/i2c-2` address `0x3c`;
+- EC11 encoder: input devices `gamepup-encoder` (dial) and
+  `gamepup-encoder-button` (push);
 - LEDs: `/sys/class/leds/gamepup:left-eye` and
   `/sys/class/leds/gamepup:right-eye`;
 - buzzer: an input device named `gamepup-buzzer` or `pwm-beeper`;
@@ -427,22 +432,29 @@ tone. The tester intentionally writes straight to the PWM buzzer and therefore
 works even when game/menu audio is muted. It switches the LEDs and buzzer off
 and restores the original backlight level when it exits.
 
-## OLED C status display
+## SH1106 OLED status display
 
-An OLED C Click in the GamePup mikroBUS socket is driven independently from the
-main LCD. The `gamepup-oled-status` service is adjustable from 5–30 Hz and shows
-the live
-AM625 clock frequency, CPU and RAM percentages, live GPU utilization, and the
-measured emulator or benchmark frame rate. The bottom line identifies the
-current activity as `MENU`, `NES`, `GBC`, `N64`, `DOOM`, or `GPU`. At the menu,
-FPS is zero because the menu redraws only in response to input rather than
-running a frame loop.
+A 1.3" 128x64 SH1106 OLED on the GamePup mikroBUS I2C lines (`/dev/i2c-2` @
+`0x3c`) is driven independently from the main LCD. The `gamepup-oled-status`
+service is adjustable from 5–30 Hz and shows the live AM625 clock frequency,
+CPU and RAM percentages, live GPU utilization, and the measured emulator or
+benchmark frame rate. The bottom line identifies the current activity as
+`MENU`, `NES`, `GBC`, `N64`, `DOOM`, or `GPU`. At the menu, FPS is zero because
+the menu redraws only in response to input rather than running a frame loop.
 
-The implementation targets the 96x96 SSD1351 OLED C Click (board revisions 1.01
-and later) and uses the manufacturer's RGB565 initialization values at an
-18 MHz SPI clock. After its initial full frame, the service sends only changed
-rectangles to keep high refresh rates efficient. The service is enabled by
-`install.sh` and starts after the overlay is active on the next boot.
+An EC11 rotary encoder on the Click control pins (AN=A / INT=B / RST=switch)
+controls the second screen directly:
+
+| Control | Action |
+|---|---|
+| Rotate | Brightness 1–8 (writes `/opt/gamepup/saves/oled-brightness`) |
+| Click | Toggle status ↔ GIF mode |
+
+Wire the OLED to mikroBUS **SDA/SCL** (PocketBeagle 2 `I2C2` on P1.26/P1.28)
+and the encoder to **AN**, **INT**, and **RST**. Override the bus or address
+with `GAMEPUP_OLED_I2C` / `GAMEPUP_OLED_ADDR` if needed. After each frame the
+service refreshes only changed 8-pixel pages. The service is enabled by
+`install.sh` and starts after I2C2 is available on the next boot.
 
 ## License and redistribution
 
