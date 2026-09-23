@@ -249,7 +249,11 @@
 	 * One dai-link only: simple-audio-card cannot attach two codecs to
 	 * one McASP (that needs audio-graph).  Use a dai-link child so the driver
 	 * looks for child names "cpu"/"codec" (not "simple-audio-card,codec");
-	 * a missing codec child is the -ENODEV "parse error" path.
+	 * a missing / mistyped codec child (e.g. "sound-audio-card,codec") is
+	 * the -ENODEV "parse error" path.
+	 *
+	 * No BBB-style fixed-clock + gpio-gate-clock here: AM62 McASP2 already
+	 * has SoC fck; we are bit/frame master and drive BCLK/LRCLK ourselves.
 	 */
 	gamepup_sound: sound-gamepup {
 		compatible = "simple-audio-card";
