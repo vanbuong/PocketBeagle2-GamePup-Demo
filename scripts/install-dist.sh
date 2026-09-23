@@ -54,6 +54,15 @@ if [ -d "$DIST_DIR/share/gifs" ]; then
 	install -m 0644 "$DIST_DIR/share/gifs/"*.gif /opt/gamepup/gifs/ 2>/dev/null || true
 fi
 
+if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
+	install -d -m 0755 /etc/modules-load.d
+	install -m 0644 "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" \
+		/etc/modules-load.d/gamepup-alsa.conf
+	modprobe snd-soc-davinci-mcasp 2>/dev/null || true
+	modprobe snd-soc-simple-card 2>/dev/null || true
+	modprobe snd-soc-max98357a 2>/dev/null || true
+fi
+
 # Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq

@@ -44,17 +44,32 @@ McASP2 is bit-clock and frame master. The amp and mic share BCLK and LRCLK.
 | INMP441 | L/R | GND | left channel |
 | INMP441 | VDD / GND | 3.3 V / GND | — |
 
-ALSA card name: `GamePup-I2S` (playback + capture). `gamepup-retro` plays
-stereo S16_LE on the playback link. Override with `GAMEPUP_ALSA_DEVICE` if
-needed. Menu UI beeps still use the on-cape PWM buzzer.
+ALSA card name: `GamePup-MAX98357` (playback). `gamepup-retro` plays stereo
+S16_LE on that card. Override with `GAMEPUP_ALSA_DEVICE` if needed. Menu UI
+beeps still use the on-cape PWM buzzer.
 
-Capture example (24-bit data in 32-bit slots):
+> **Note:** `simple-audio-card` only supports one codec per McASP. A second
+> dai-link for the INMP441 made the card fail probe (`asoc-simple-card: parse
+> error`) so ALSA never created card 0. Playback is enabled alone for now; P2.07
+> stays muxed for a future audio-graph capture path. Voice memo can still use
+> `arecord` once capture is restored.
+
+After installing the overlay, confirm the card and load codec modules if needed:
 
 ```sh
-arecord -D plughw:GamePupI2S -c 2 -r 48000 -f S32_LE -d 5 /tmp/mic.wav
-aplay -D plughw:GamePupI2S /tmp/mic.wav
+sudo modprobe snd-soc-davinci-mcasp
+sudo modprobe snd-soc-simple-card
+sudo modprobe snd-soc-max98357a
+aplay -l
+dmesg | grep -iE 'sound|mcasp|max98357|simple-card'
 ```
 
+Capture example (after a future capture-capable card is present):
+
+```sh
+arecord -D plughw:0,0 -c 2 -r 48000 -f S32_LE -d 5 /tmp/mic.wav
+aplay -D plughw:GamePupMAX98357 /tmp/mic.wav
+```
 `TOOLS > VOICE MEMO` records and plays clips through this card. Memos are stored
 as WAV files under `/opt/gamepup/voice-memos/` (`memo-YYYYMMDD-HHMMSS.wav`).
 In the tool: **A** starts/stops recording or plays a memo, **Select** deletes,
@@ -212,7 +227,7 @@ the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
 - LEDs: `/sys/class/leds/gamepup:left-eye` and
   `/sys/class/leds/gamepup:right-eye`;
 - buzzer: an input device named `gamepup-buzzer` or `pwm-beeper`;
-- I2S audio: ALSA card `GamePup-I2S` (MAX98357A playback + INMP441 capture);
+- I2S audio: ALSA card `GamePup-MAX98357` (MAX98357A playback on McASP2);
 - EEPROM: `/sys/bus/i2c/devices/2-0057/eeprom`.
 
 When the PocketBeagle 2 device USB port is connected to a computer, the

@@ -105,7 +105,8 @@
 	/*
 	 * McASP2 I2S (SoC bit/frame master), 3.3 V peripherals:
 	 *   MAX98357A amp:  P2.11 BCLK, P2.10 LRCLK, P2.05 DIN (AXR0 TX)
-	 *   INMP441 mic:    shared BCLK/LRCLK, P2.07 SD (AXR1 RX)
+	 *   INMP441 mic SD on P2.07 (AXR1) is pinmuxed for later capture;
+	 *   simple-audio-card is playback-only (one codec per McASP).
 	 *   MAX98357 SD_MODE on P1.36A (GPIO mute).
 	 */
 	gamepup_mcasp2_pins: gamepup-mcasp2-pins {
@@ -197,9 +198,14 @@
 	status = "okay";
 	op-mode = <0>; /* DAVINCI_MCASP_IIS_MODE */
 	tdm-slots = <2>;
-	/* AXR0 = TX (amp), AXR1 = RX (mic); remaining serializers inactive. */
+	/*
+	 * AXR0 = TX (MAX98357).  AXR1 stays RX-capable in the pinmux for an
+	 * INMP441, but simple-audio-card cannot attach two codecs to one
+	 * McASP (that needs audio-graph / DPCM).  Ship playback-only for a
+	 * reliable ALSA card; capture can be added later with graph-card2.
+	 */
 	serial-dir = <
-		1 2 0 0
+		1 0 0 0
 		0 0 0 0
 		0 0 0 0
 		0 0 0 0
@@ -215,51 +221,30 @@
 		#sound-dai-cells = <0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&gamepup_max98357_sdmode_pin>;
+		/* Optional: omit sdmode-gpios and tie SD_MODE to 3.3V instead. */
 		sdmode-gpios = <&main_gpio1 28 0>;
 		sdmode-delay = <5>;
 	};
 
 	/*
-	 * INMP441 is software-compatible with the ICS-43432 I2S MEMS mic
-	 * driver (64 BCLKs/frame, 24-bit samples in 32-bit slots).
+	 * Single CPU↔codec link.  Do not add a second dai-link on &mcasp2:
+	 * simple-audio-card probe then fails with "parse error" / deferred
+	 * probe and ALSA never gets a card.
 	 */
-	gamepup_inmp441: inmp441 {
-		compatible = "invensense,ics43432";
-		#sound-dai-cells = <0>;
-	};
-
 	gamepup_sound: sound {
 		compatible = "simple-audio-card";
-		simple-audio-card,name = "GamePup-I2S";
+		simple-audio-card,name = "GamePup-MAX98357";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,bitclock-master = <&gamepup_sound_cpu>;
+		simple-audio-card,frame-master = <&gamepup_sound_cpu>;
 
-		simple-audio-card,dai-link@0 {
-			format = "i2s";
-			bitclock-master = <&gamepup_playback_cpu>;
-			frame-master = <&gamepup_playback_cpu>;
-
-			gamepup_playback_cpu: cpu {
-				sound-dai = <&mcasp2>;
-				system-clock-direction-out;
-			};
-
-			codec {
-				sound-dai = <&gamepup_max98357a>;
-			};
+		gamepup_sound_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcasp2>;
+			system-clock-direction-out;
 		};
 
-		simple-audio-card,dai-link@1 {
-			format = "i2s";
-			bitclock-master = <&gamepup_capture_cpu>;
-			frame-master = <&gamepup_capture_cpu>;
-
-			gamepup_capture_cpu: cpu {
-				sound-dai = <&mcasp2>;
-				system-clock-direction-out;
-			};
-
-			codec {
-				sound-dai = <&gamepup_inmp441>;
-			};
+		simple-audio-card,codec {
+			sound-dai = <&gamepup_max98357a>;
 		};
 	};
 

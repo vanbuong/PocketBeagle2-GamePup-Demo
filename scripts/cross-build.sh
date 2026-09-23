@@ -309,6 +309,9 @@ copy_scripts() {
 		"$ROOT_DIR/emulator/gamepup-voice-memo" \
 		"$ROOT_DIR/emulator/gamepup-music-player" \
 		"$DIST_DIR/bin/"
+	install -d -m 0755 "$DIST_DIR/etc/modules-load.d"
+	install -m 0644 "$ROOT_DIR/emulator/gamepup-alsa.conf" \
+		"$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf"
 }
 
 main() {

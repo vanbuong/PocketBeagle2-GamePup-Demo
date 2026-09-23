@@ -37,6 +37,7 @@
 #define DEFAULT_INPUT "/dev/input/by-path/platform-gamepup-buttons-event"
 #define DEFAULT_FB "/dev/fb0"
 #define DEFAULT_ALSA_DEVICE "default"
+#define ALSA_CARD_HINT "GamePup"
 #define SYSTEM_DIR "/opt/gamepup/system"
 #define SAVE_DIR "/opt/gamepup/saves"
 #define MUTE_FILE SAVE_DIR "/audio-muted"
@@ -900,84 +901,157 @@ static void close_alsa(void)
 	alsa_pcm = NULL;
 }
 
+static int alsa_try_open(const char *device)
+{
+	int err = snd_pcm_open(&alsa_pcm, device, SND_PCM_STREAM_PLAYBACK, 0);
+	if (err < 0) {
+		alsa_pcm = NULL;
+		return err;
+	}
+	return 0;
+}
+
+/*
+ * Prefer an explicit GAMEPUP_ALSA_DEVICE, then plughw matching our card name,
+ * then default/hw:0,0 so a missing "default" symlink is not fatal.
+ */
+static const char *alsa_pick_device(char *resolved, size_t resolved_size)
+{
+	const char *env = getenv("GAMEPUP_ALSA_DEVICE");
+	void **hints = NULL;
+	int card = -1;
+
+	if (env && env[0])
+		return env;
+
+	if (snd_device_name_hint(-1, "pcm", &hints) == 0 && hints) {
+		for (void **pos = hints; *pos; ++pos) {
+			char *name = snd_device_name_get_hint(*pos, "NAME");
+			char *desc = snd_device_name_get_hint(*pos, "DESC");
+			int useful = name && strstr(name, "plughw") &&
+				     ((desc && strstr(desc, ALSA_CARD_HINT)) ||
+				      (name && strstr(name, ALSA_CARD_HINT)));
+			if (useful) {
+				snprintf(resolved, resolved_size, "%s", name);
+				free(name);
+				free(desc);
+				snd_device_name_free_hint(hints);
+				return resolved;
+			}
+			free(name);
+			free(desc);
+		}
+		snd_device_name_free_hint(hints);
+	}
+
+	if (snd_card_next(&card) == 0 && card >= 0) {
+		snprintf(resolved, resolved_size, "plughw:%d,0", card);
+		return resolved;
+	}
+	return DEFAULT_ALSA_DEVICE;
+}
+
 static bool open_alsa(unsigned rate)
 {
-	const char *device;
+	char resolved[128];
+	const char *candidates[4];
+	size_t candidate_count = 0;
+	const char *picked;
 	snd_pcm_hw_params_t *params = NULL;
 	snd_pcm_uframes_t buffer_size;
 	snd_pcm_uframes_t period_size;
 	unsigned int actual_rate;
-	int err;
+	int err = -ENODEV;
+	size_t i;
 
-	device = getenv("GAMEPUP_ALSA_DEVICE");
-	if (!device || !device[0])
-		device = DEFAULT_ALSA_DEVICE;
+	picked = alsa_pick_device(resolved, sizeof(resolved));
+	candidates[candidate_count++] = picked;
+	if (strcmp(picked, "default") != 0)
+		candidates[candidate_count++] = "default";
+	candidates[candidate_count++] = "plughw:0,0";
+	candidates[candidate_count++] = "hw:0,0";
 
-	err = snd_pcm_open(&alsa_pcm, device, SND_PCM_STREAM_PLAYBACK, 0);
-	if (err < 0) {
-		fprintf(stderr, "ALSA open (%s): %s\n", device, snd_strerror(err));
-		alsa_pcm = NULL;
-		return false;
+	for (i = 0; i < candidate_count; ++i) {
+		const char *device = candidates[i];
+		size_t j;
+		int duplicate = 0;
+
+		for (j = 0; j < i; ++j) {
+			if (strcmp(candidates[j], device) == 0) {
+				duplicate = 1;
+				break;
+			}
+		}
+		if (duplicate)
+			continue;
+
+		err = alsa_try_open(device);
+		if (err < 0) {
+			fprintf(stderr, "ALSA open (%s): %s\n", device, snd_strerror(err));
+			continue;
+		}
+
+		err = snd_pcm_hw_params_malloc(&params);
+		if (err < 0)
+			goto fail_device;
+
+		err = snd_pcm_hw_params_any(alsa_pcm, params);
+		if (err < 0)
+			goto fail_device;
+		err = snd_pcm_hw_params_set_access(alsa_pcm, params,
+						   SND_PCM_ACCESS_RW_INTERLEAVED);
+		if (err < 0)
+			goto fail_device;
+		err = snd_pcm_hw_params_set_format(alsa_pcm, params, SND_PCM_FORMAT_S16_LE);
+		if (err < 0)
+			goto fail_device;
+		err = snd_pcm_hw_params_set_channels(alsa_pcm, params, 2);
+		if (err < 0)
+			goto fail_device;
+
+		actual_rate = rate;
+		err = snd_pcm_hw_params_set_rate_near(alsa_pcm, params, &actual_rate, 0);
+		if (err < 0)
+			goto fail_device;
+
+		buffer_size = actual_rate / 10;
+		if (buffer_size < 512)
+			buffer_size = 512;
+		err = snd_pcm_hw_params_set_buffer_size_near(alsa_pcm, params, &buffer_size);
+		if (err < 0)
+			goto fail_device;
+		period_size = buffer_size / 4;
+		if (period_size < 128)
+			period_size = 128;
+		err = snd_pcm_hw_params_set_period_size_near(alsa_pcm, params, &period_size, 0);
+		if (err < 0)
+			goto fail_device;
+
+		err = snd_pcm_hw_params(alsa_pcm, params);
+		if (err < 0)
+			goto fail_device;
+		snd_pcm_hw_params_free(params);
+		params = NULL;
+
+		err = snd_pcm_prepare(alsa_pcm);
+		if (err < 0)
+			goto fail_device;
+
+		audio_sample_rate = actual_rate;
+		fprintf(stderr, "ALSA %s: %u Hz stereo S16_LE (buffer %lu period %lu).\n",
+			device, actual_rate, (unsigned long)buffer_size,
+			(unsigned long)period_size);
+		return true;
+
+fail_device:
+		fprintf(stderr, "ALSA configure (%s): %s\n", device, snd_strerror(err));
+		if (params) {
+			snd_pcm_hw_params_free(params);
+			params = NULL;
+		}
+		close_alsa();
 	}
 
-	err = snd_pcm_hw_params_malloc(&params);
-	if (err < 0)
-		goto fail;
-
-	err = snd_pcm_hw_params_any(alsa_pcm, params);
-	if (err < 0)
-		goto fail;
-	err = snd_pcm_hw_params_set_access(alsa_pcm, params,
-					   SND_PCM_ACCESS_RW_INTERLEAVED);
-	if (err < 0)
-		goto fail;
-	err = snd_pcm_hw_params_set_format(alsa_pcm, params, SND_PCM_FORMAT_S16_LE);
-	if (err < 0)
-		goto fail;
-	err = snd_pcm_hw_params_set_channels(alsa_pcm, params, 2);
-	if (err < 0)
-		goto fail;
-
-	actual_rate = rate;
-	err = snd_pcm_hw_params_set_rate_near(alsa_pcm, params, &actual_rate, 0);
-	if (err < 0)
-		goto fail;
-
-	/* ~100 ms buffer / ~25 ms period keeps latency low without underruns. */
-	buffer_size = actual_rate / 10;
-	if (buffer_size < 512)
-		buffer_size = 512;
-	err = snd_pcm_hw_params_set_buffer_size_near(alsa_pcm, params, &buffer_size);
-	if (err < 0)
-		goto fail;
-	period_size = buffer_size / 4;
-	if (period_size < 128)
-		period_size = 128;
-	err = snd_pcm_hw_params_set_period_size_near(alsa_pcm, params, &period_size, 0);
-	if (err < 0)
-		goto fail;
-
-	err = snd_pcm_hw_params(alsa_pcm, params);
-	if (err < 0)
-		goto fail;
-	snd_pcm_hw_params_free(params);
-	params = NULL;
-
-	err = snd_pcm_prepare(alsa_pcm);
-	if (err < 0)
-		goto fail;
-
-	audio_sample_rate = actual_rate;
-	fprintf(stderr, "ALSA %s: %u Hz stereo S16_LE (buffer %lu period %lu).\n",
-		device, actual_rate, (unsigned long)buffer_size,
-		(unsigned long)period_size);
-	return true;
-
-fail:
-	fprintf(stderr, "ALSA configure (%s): %s\n", device, snd_strerror(err));
-	if (params)
-		snd_pcm_hw_params_free(params);
-	close_alsa();
 	return false;
 }
 
