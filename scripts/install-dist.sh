@@ -85,13 +85,23 @@ fi
 if [ -f "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" ]; then
 	install -d -m 0755 /boot/dtb/ti
 	install -m 0644 "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" "$OVERLAY_TARGET"
-	if [ -f "$EXTLINUX_CONFIG" ] && ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
+	# Some images also keep a copy under /boot/dtbs/<kver>/ti/
+	if [ -d "/boot/dtbs/$KERNEL_VERSION/ti" ]; then
+		install -m 0644 "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" \
+			"/boot/dtbs/$KERNEL_VERSION/ti/$OVERLAY_NAME.dtbo"
+	fi
+	if [ -f "$EXTLINUX_CONFIG" ] && ! grep -qF "$OVERLAY_NAME.dtbo" "$EXTLINUX_CONFIG"; then
 		if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-a4" ]; then
 			cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-a4"
 		fi
 		sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays /dtb/ti/$OVERLAY_NAME.dtbo" \
 			"$EXTLINUX_CONFIG"
 	fi
+	echo "Installed overlay: $OVERLAY_TARGET"
+	echo "After reboot verify audio DT with:"
+	echo "  cat /proc/device-tree/chosen/overlays/gamepup-a4-audio"
+	echo "  ls /proc/device-tree/sound-gamepup"
+	echo "  ls /proc/device-tree/max98357a"
 fi
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then

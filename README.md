@@ -54,25 +54,36 @@ beeps still use the on-cape PWM buzzer.
 > stays muxed for a future audio-graph capture path. Voice memo can still use
 > `arecord` once capture is restored.
 
-After installing the overlay, confirm the card and load codec modules if needed:
+After installing the overlay, **reboot**, then confirm the *new* audio DT is
+live (the card node is `sound-gamepup`, not `sound`):
 
 ```sh
-sudo modprobe snd-soc-davinci-mcasp
-sudo modprobe snd-soc-simple-card
-sudo modprobe snd-soc-max98357a
+cat /proc/device-tree/chosen/overlays/gamepup-a4-audio
+# expect: max98357-playback-v3-sound-gamepup
+
+ls /proc/device-tree/sound-gamepup /proc/device-tree/max98357a
+# both must exist — if you only see /proc/device-tree/sound, the old dtbo is still loaded
+
+sudo modprobe snd-soc-davinci-mcasp snd-soc-simple-card snd-soc-max98357a
 aplay -l
 # Expect: card 0: GamePupMAX98357 [GamePup-MAX98357], device 0: ...
 
-# If aplay -l is still empty, check probe state:
+# If aplay -l is still empty:
 cat /sys/kernel/debug/devices_deferred 2>/dev/null
 ls /sys/bus/platform/drivers/davinci-mcasp/
 ls /sys/devices/platform/ | grep -iE 'sound|mcasp|max98'
-dmesg | grep -iE 'sound|mcasp|max98357|simple-card|parse error'
+dmesg | grep -iE 'sound|mcasp|max98357|simple-card'
+grep -n gamepup /boot/extlinux/extlinux.conf
+ls -l /boot/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4.dtbo
 ```
 
+`dmesg` showing `asoc-simple-card sound:` (no `-gamepup`) means the board is
+still booting an **old** overlay. Re-copy the `.dtbo` into the path listed in
+`extlinux.conf` (and `/boot/dtbs/$(uname -r)/ti/` if that directory exists),
+then reboot.
+
 SD_MODE is held high by a `gpio-leds` hog on P1.36 (`gamepup:max98357-sdmode`).
-If you prefer, you may instead hard-wire SD_MODE to 3.3 V and ignore that LED.
-Capture example (after a future capture-capable card is present):
+If you prefer, you may instead hard-wire SD_MODE to 3.3 V and ignore that LED.Capture example (after a future capture-capable card is present):
 
 ```sh
 arecord -D plughw:0,0 -c 2 -r 48000 -f S32_LE -d 5 /tmp/mic.wav

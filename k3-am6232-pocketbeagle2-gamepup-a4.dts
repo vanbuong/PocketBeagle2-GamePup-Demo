@@ -21,6 +21,8 @@
 &{/chosen} {
 	overlays {
 		gamepup-a4 = "PocketBeagle 2 GamePup A4";
+		/* Bump this string when audio DT changes; check via /proc. */
+		gamepup-a4-audio = "max98357-playback-v3-sound-gamepup";
 	};
 };
 
