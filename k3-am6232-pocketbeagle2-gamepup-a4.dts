@@ -101,6 +101,26 @@
 			0x0164 0x200007 /* P1.02 alternate AM62x pad disabled */
 		>;
 	};
+
+	/*
+	 * MAX98357A I2S amp on McASP2 (SoC is bit/frame master).
+	 * P2.11 BCLK, P2.10 LRCLK, P2.05 DIN.  Power the amp from 3.3 V.
+	 * P1.36A drives SD_MODE for mute/unmute without speaker pop.
+	 */
+	gamepup_mcasp2_pins: gamepup-mcasp2-pins {
+		pinctrl-single,pins = <
+			0x01d8 0x040008 /* P2.05 C15: MCASP2_AXR0 TX (DIN) */
+			0x0174 0x040002 /* P2.10 AD21: MCASP2_AFSX (LRCLK) */
+			0x01d4 0x040008 /* P2.11 B15: MCASP2_ACLKX (BCLK) */
+		>;
+	};
+
+	gamepup_max98357_sdmode_pin: gamepup-max98357-sdmode-pin {
+		pinctrl-single,pins = <
+			0x01e8 0x010007 /* P1.36A B17: GPIO1_28 SD_MODE output */
+			0x00e0 0x200007 /* P1.36 V20: alternate pad disabled */
+		>;
+	};
 };
 
 &main_spi2 {
@@ -150,7 +170,7 @@
 
 &epwm2 {
 	status = "okay";
-	/* Keep P1.36 free; the buzzer supplies its P1.33 pinctrl below. */
+	/* Clear inherited EHRPWM2_A on P1.36; SD_MODE claims that pad below. */
 	pinctrl-names = "default";
 	pinctrl-0 = <>;
 };
@@ -168,7 +188,51 @@
 	};
 };
 
+&mcasp2 {
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&gamepup_mcasp2_pins>;
+	status = "okay";
+	op-mode = <0>; /* DAVINCI_MCASP_IIS_MODE */
+	tdm-slots = <2>;
+	serial-dir = <
+		1 0 0 0
+		0 0 0 0
+		0 0 0 0
+		0 0 0 0
+	>;
+	tx-num-evt = <0>;
+	rx-num-evt = <0>;
+	auxclk-fs-ratio = <256>;
+};
+
 &{/} {
+	gamepup_max98357a: max98357a {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_max98357_sdmode_pin>;
+		sdmode-gpios = <&main_gpio1 28 0>;
+		sdmode-delay = <5>;
+	};
+
+	gamepup_sound: sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "GamePup-MAX98357";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,bitclock-master = <&gamepup_sound_cpu>;
+		simple-audio-card,frame-master = <&gamepup_sound_cpu>;
+
+		gamepup_sound_cpu: simple-audio-card,cpu {
+			sound-dai = <&mcasp2>;
+			system-clock-direction-out;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&gamepup_max98357a>;
+		};
+	};
+
 	gamepup_backlight: backlight-gamepup {
 		compatible = "pwm-backlight";
 		pwms = <&ecap2 0 100000 0>;

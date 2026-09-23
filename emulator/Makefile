@@ -5,7 +5,7 @@ KHRONOS_INCLUDE ?= $(CURDIR)/khronos
 CFLAGS ?= -O2 -pipe
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic \
 	-I$(LIBRETRO_INCLUDE) -I$(KHRONOS_INCLUDE)
-LDLIBS += -ldl
+LDLIBS += -ldl -lasound
 
 .PHONY: all clean gles apps
 

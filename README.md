@@ -16,7 +16,8 @@ This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 - the ILI9341 display as DRM/fbdev (landscape 320x240);
 - PWM display backlight;
 - both eye LEDs;
-- PWM buzzer;
+- PWM buzzer (menu beeps / hardware test);
+- MAX98357A I2S speaker amp on McASP2 (PCM game audio, 3.3 V);
 - the Click socket's SPI device (`spidev`);
 - SH1106 1.3" I2C OLED status dashboard and EC11 encoder on the Click socket;
 - a safe FAT32 USB ROM inbox alongside USB networking and serial;
@@ -24,6 +25,21 @@ This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 
 The cape's USB host port and I2C2 bus are already enabled by the stock PB2
 device tree.
+
+### MAX98357A wiring (3.3 V)
+
+| Amp pin | PocketBeagle 2 | Function |
+|---|---|---|
+| BCLK | P2.11 | McASP2 bit clock |
+| LRCLK / LRC | P2.10 | McASP2 frame sync |
+| DIN | P2.05 | McASP2 AXR0 (playback data) |
+| SD_MODE | P1.36 | GPIO mute (driven by the codec driver) |
+| VIN | 3.3 V | Amp supply |
+| GND | GND | Ground |
+
+`gamepup-retro` plays stereo S16_LE PCM through ALSA card `GamePup-MAX98357`.
+Override the device with `GAMEPUP_ALSA_DEVICE` if needed. Menu UI beeps still
+use the on-cape PWM buzzer.
 
 ## Screenshots
 
@@ -176,6 +192,7 @@ the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
 - LEDs: `/sys/class/leds/gamepup:left-eye` and
   `/sys/class/leds/gamepup:right-eye`;
 - buzzer: an input device named `gamepup-buzzer` or `pwm-beeper`;
+- MAX98357A: ALSA card `GamePup-MAX98357` (McASP2 I2S);
 - EEPROM: `/sys/bus/i2c/devices/2-0057/eeprom`.
 
 When the PocketBeagle 2 device USB port is connected to a computer, the
@@ -228,10 +245,8 @@ Controls:
 | Start (1) | Start |
 | Hold Start + Select | Exit |
 
-The cape has a single PWM tone buzzer rather than PCM audio hardware. The
-frontend converts the mixed emulator audio into an approximate monophonic tone
-with silence gating and pitch tracking. It preserves recognizable melodies and
-effects, but cannot reproduce the original multi-channel audio or volume.
+Game audio plays as PCM through the MAX98357A on McASP2 (ALSA). The on-cape
+PWM buzzer remains available for menu beeps and the hardware tester.
 
 ## NES library
 
@@ -382,7 +397,8 @@ Settings provides persistent toggles for all sound and menu beeps, an eight-step
 hardware-PWM backlight slider adjusted with D-pad Left/Right (sysfs path
 `backlight-gamepup` or `lcd-backlight`), plus an
 `EXIT TO TTY` action that stops the launcher and restores the Linux framebuffer
-console. Muted games do not open the PWM buzzer device.
+console. Muted games skip ALSA PCM open (menu beeps still use the PWM buzzer
+unless menu beeps are muted separately).
 
 The `SECOND SCREEN` settings submenu provides persistent controls for turning
 the OLED status display on or off, its eight-step brightness slider, a 5–30 Hz

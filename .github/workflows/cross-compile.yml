@@ -48,6 +48,7 @@ jobs:
             gcc-14-aarch64-linux-gnu \
             g++-14-aarch64-linux-gnu \
             git \
+            libasound2-dev:arm64 \
             libegl1-mesa-dev:arm64 \
             libgles2-mesa-dev:arm64 \
             libgif-dev:arm64 \

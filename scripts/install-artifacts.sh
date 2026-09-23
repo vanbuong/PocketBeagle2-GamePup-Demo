@@ -47,10 +47,12 @@ if [ -d "$DIST_DIR/share/gifs" ]; then
 	install -m 0644 "$DIST_DIR/share/gifs/"*.gif /opt/gamepup/gifs/ 2>/dev/null || true
 fi
 
-# Doom shareware WAD (same as emulator/install-doom.sh)
+# Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y --no-install-recommends libasound2t64 || \
+	apt-get install -y --no-install-recommends libasound2
 if [ ! -f /usr/share/games/doom/doom1.wad ]; then
-	export DEBIAN_FRONTEND=noninteractive
-	apt-get update -qq
 	apt-get install -y --no-install-recommends doom-wad-shareware
 fi
 install -m 0644 /usr/share/games/doom/doom1.wad \

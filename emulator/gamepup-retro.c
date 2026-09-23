@@ -5,7 +5,7 @@
  *
  * Video is scaled with bilinear sampling directly into /dev/fb0.
  * Input comes from the GamePup gpio-keys event device. Emulator audio is
- * reduced to an approximate monophonic pitch for the cape's PWM tone buzzer.
+ * played as PCM stereo through ALSA to a MAX98357A on McASP2.
  */
 
 #define _GNU_SOURCE
@@ -13,6 +13,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
+#include <alsa/asoundlib.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -35,7 +36,7 @@
 #define DEFAULT_CORE "/usr/local/lib/libretro/gambatte_libretro.so"
 #define DEFAULT_INPUT "/dev/input/by-path/platform-gamepup-buttons-event"
 #define DEFAULT_FB "/dev/fb0"
-#define DEFAULT_BUZZER "/dev/input/by-path/platform-gamepup-buzzer-event"
+#define DEFAULT_ALSA_DEVICE "default"
 #define SYSTEM_DIR "/opt/gamepup/system"
 #define SAVE_DIR "/opt/gamepup/saves"
 #define MUTE_FILE SAVE_DIR "/audio-muted"
@@ -72,7 +73,9 @@ static struct core_api core;
 static void *core_handle;
 static int fb_fd = -1;
 static int input_fd = -1;
-static int buzzer_fd = -1;
+static snd_pcm_t *alsa_pcm;
+static bool audio_enabled;
+static unsigned alsa_frames_written;
 /* Logical landscape canvas used for scaling/bezels (always 32-bit XRGB). */
 static uint8_t *fb_frame;
 static size_t fb_frame_size;
@@ -107,12 +110,6 @@ static const char *rom_path;
 static uint8_t *rom_data;
 static size_t rom_size;
 static double audio_sample_rate;
-static int32_t previous_audio_sample;
-static uint64_t audio_amplitude_sum;
-static unsigned audio_window_frames;
-static unsigned audio_zero_crossings;
-static int buzzer_frequency;
-static unsigned buzzer_updates;
 static struct timespec fps_started;
 static unsigned presented_frames;
 static bool fps_started_valid;
@@ -894,65 +891,132 @@ static const char *bezel_style_name(enum bezel_style style)
 	}
 }
 
-static void set_buzzer_frequency(int frequency)
+static void close_alsa(void)
 {
-	struct input_event event = {
-		.type = EV_SND,
-		.code = SND_TONE,
-		.value = frequency,
-	};
-
-	if (buzzer_fd < 0 || frequency == buzzer_frequency)
+	if (!alsa_pcm)
 		return;
-	if (write(buzzer_fd, &event, sizeof(event)) != sizeof(event)) {
-		perror("write PWM buzzer");
-		close(buzzer_fd);
-		buzzer_fd = -1;
-		return;
-	}
-	buzzer_frequency = frequency;
-	++buzzer_updates;
+	snd_pcm_drop(alsa_pcm);
+	snd_pcm_close(alsa_pcm);
+	alsa_pcm = NULL;
 }
 
-static void process_audio_sample(int16_t left, int16_t right)
+static bool open_alsa(unsigned rate)
 {
-	int32_t sample;
-	unsigned target_frames;
-	int target_frequency = 0;
+	const char *device;
+	snd_pcm_hw_params_t *params = NULL;
+	snd_pcm_uframes_t buffer_size;
+	snd_pcm_uframes_t period_size;
+	unsigned int actual_rate;
+	int err;
 
-	if (buzzer_fd < 0 || audio_sample_rate <= 0.0)
-		return;
+	device = getenv("GAMEPUP_ALSA_DEVICE");
+	if (!device || !device[0])
+		device = DEFAULT_ALSA_DEVICE;
 
-	sample = ((int32_t)left + (int32_t)right) / 2;
-	audio_amplitude_sum += sample < 0 ? (uint32_t)-sample : (uint32_t)sample;
-	if (previous_audio_sample <= 0 && sample > 0)
-		++audio_zero_crossings;
-	previous_audio_sample = sample;
-	++audio_window_frames;
-
-	target_frames = (unsigned)(audio_sample_rate / 30.0);
-	if (!target_frames || audio_window_frames < target_frames)
-		return;
-
-	if (audio_amplitude_sum / audio_window_frames >= 384 &&
-	    audio_zero_crossings > 0) {
-		target_frequency = (int)((audio_zero_crossings * audio_sample_rate) /
-					 audio_window_frames + 0.5);
-		if (target_frequency < 60)
-			target_frequency = 60;
-		if (target_frequency > 4000)
-			target_frequency = 4000;
-
-		/* Avoid reprogramming the PWM for insignificant pitch jitter. */
-		if (buzzer_frequency > 0 &&
-		    abs(target_frequency - buzzer_frequency) < buzzer_frequency / 32)
-			target_frequency = buzzer_frequency;
+	err = snd_pcm_open(&alsa_pcm, device, SND_PCM_STREAM_PLAYBACK, 0);
+	if (err < 0) {
+		fprintf(stderr, "ALSA open (%s): %s\n", device, snd_strerror(err));
+		alsa_pcm = NULL;
+		return false;
 	}
 
-	set_buzzer_frequency(target_frequency);
-	audio_amplitude_sum = 0;
-	audio_window_frames = 0;
-	audio_zero_crossings = 0;
+	err = snd_pcm_hw_params_malloc(&params);
+	if (err < 0)
+		goto fail;
+
+	err = snd_pcm_hw_params_any(alsa_pcm, params);
+	if (err < 0)
+		goto fail;
+	err = snd_pcm_hw_params_set_access(alsa_pcm, params,
+					   SND_PCM_ACCESS_RW_INTERLEAVED);
+	if (err < 0)
+		goto fail;
+	err = snd_pcm_hw_params_set_format(alsa_pcm, params, SND_PCM_FORMAT_S16_LE);
+	if (err < 0)
+		goto fail;
+	err = snd_pcm_hw_params_set_channels(alsa_pcm, params, 2);
+	if (err < 0)
+		goto fail;
+
+	actual_rate = rate;
+	err = snd_pcm_hw_params_set_rate_near(alsa_pcm, params, &actual_rate, 0);
+	if (err < 0)
+		goto fail;
+
+	/* ~100 ms buffer / ~25 ms period keeps latency low without underruns. */
+	buffer_size = actual_rate / 10;
+	if (buffer_size < 512)
+		buffer_size = 512;
+	err = snd_pcm_hw_params_set_buffer_size_near(alsa_pcm, params, &buffer_size);
+	if (err < 0)
+		goto fail;
+	period_size = buffer_size / 4;
+	if (period_size < 128)
+		period_size = 128;
+	err = snd_pcm_hw_params_set_period_size_near(alsa_pcm, params, &period_size, 0);
+	if (err < 0)
+		goto fail;
+
+	err = snd_pcm_hw_params(alsa_pcm, params);
+	if (err < 0)
+		goto fail;
+	snd_pcm_hw_params_free(params);
+	params = NULL;
+
+	err = snd_pcm_prepare(alsa_pcm);
+	if (err < 0)
+		goto fail;
+
+	audio_sample_rate = actual_rate;
+	fprintf(stderr, "ALSA %s: %u Hz stereo S16_LE (buffer %lu period %lu).\n",
+		device, actual_rate, (unsigned long)buffer_size,
+		(unsigned long)period_size);
+	return true;
+
+fail:
+	fprintf(stderr, "ALSA configure (%s): %s\n", device, snd_strerror(err));
+	if (params)
+		snd_pcm_hw_params_free(params);
+	close_alsa();
+	return false;
+}
+
+static void write_alsa_frames(const int16_t *data, size_t frames)
+{
+	const int16_t *cursor = data;
+	size_t remaining = frames;
+
+	if (!alsa_pcm || !frames)
+		return;
+
+	while (remaining > 0) {
+		snd_pcm_sframes_t wrote = snd_pcm_writei(alsa_pcm, cursor, remaining);
+		if (wrote == -EPIPE) {
+			if (snd_pcm_prepare(alsa_pcm) < 0) {
+				fprintf(stderr, "ALSA recover failed; closing PCM.\n");
+				close_alsa();
+				return;
+			}
+			continue;
+		}
+		if (wrote == -ESTRPIPE) {
+			while ((wrote = snd_pcm_resume(alsa_pcm)) == -EAGAIN)
+				usleep(1000);
+			if (wrote < 0 && snd_pcm_prepare(alsa_pcm) < 0) {
+				close_alsa();
+				return;
+			}
+			continue;
+		}
+		if (wrote < 0) {
+			fprintf(stderr, "ALSA write: %s\n", snd_strerror((int)wrote));
+			close_alsa();
+			return;
+		}
+		cursor += (size_t)wrote * 2;
+		remaining -= (size_t)wrote;
+		alsa_frames_written += (unsigned)wrote;
+	}
 }
 
 static uint32_t rgba_pixel_to_xrgb8888(const uint8_t *row, unsigned x)
@@ -1130,13 +1194,16 @@ static void video_callback(const void *data, unsigned width, unsigned height,
 
 static void audio_callback(int16_t left, int16_t right)
 {
-	process_audio_sample(left, right);
+	int16_t frame[2] = { left, right };
+
+	if (audio_enabled)
+		write_alsa_frames(frame, 1);
 }
 
 static size_t audio_batch_callback(const int16_t *data, size_t frames)
 {
-	for (size_t frame = 0; frame < frames; ++frame)
-		process_audio_sample(data[frame * 2], data[frame * 2 + 1]);
+	if (audio_enabled)
+		write_alsa_frames(data, frames);
 	return frames;
 }
 
@@ -1442,13 +1509,9 @@ static void open_devices(const char *framebuffer_path, const char *input_path)
 		bezel_style = BEZEL_GAMEPUP;
 	}
 	fprintf(stderr, "Game bezel: %s.\n", bezel_style_name(bezel_style));
-	if (audio_muted) {
-		fprintf(stderr, "PWM buzzer muted from the GamePup menu.\n");
-	} else {
-		buzzer_fd = open(DEFAULT_BUZZER, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
-		if (buzzer_fd < 0)
-			fprintf(stderr, "PWM buzzer unavailable: %s\n", strerror(errno));
-	}
+	audio_enabled = !audio_muted;
+	if (audio_muted)
+		fprintf(stderr, "ALSA audio muted from the GamePup menu.\n");
 }
 
 static void add_nanoseconds(struct timespec *time, uint64_t nanoseconds)
@@ -1527,6 +1590,15 @@ int main(int argc, char **argv)
 	}
 	core.get_system_av_info(&av_info);
 	audio_sample_rate = av_info.timing.sample_rate;
+	if (audio_enabled) {
+		unsigned rate = (unsigned)(audio_sample_rate + 0.5);
+		if (rate < 8000)
+			rate = 48000;
+		if (!open_alsa(rate)) {
+			fprintf(stderr, "Continuing without PCM audio.\n");
+			audio_enabled = false;
+		}
+	}
 	load_save_ram();
 
 	frame_period = (uint64_t)(1000000000.0 / av_info.timing.fps);
@@ -1537,8 +1609,8 @@ int main(int argc, char **argv)
 	fprintf(stderr, "Running %.3f fps on %ux%u framebuffer. "
 		"Hold Start+Select to quit.\n", av_info.timing.fps,
 		fb_width, fb_height);
-	if (buzzer_fd >= 0)
-		fprintf(stderr, "PWM buzzer audio enabled at %.0f Hz source rate.\n",
+	if (alsa_pcm)
+		fprintf(stderr, "MAX98357 PCM audio enabled at %.0f Hz.\n",
 			audio_sample_rate);
 
 	while (keep_running) {
@@ -1556,11 +1628,10 @@ int main(int argc, char **argv)
 		}
 	}
 
-	set_buzzer_frequency(0);
 	unlink(FPS_FILE);
-	if (buzzer_fd >= 0)
-		fprintf(stderr, "PWM buzzer produced %u tone updates.\n",
-			buzzer_updates);
+	if (alsa_frames_written)
+		fprintf(stderr, "ALSA wrote %u PCM frames.\n", alsa_frames_written);
+	close_alsa();
 	save_save_ram();
 	core.unload_game();
 	core.deinit();
@@ -1569,8 +1640,6 @@ int main(int argc, char **argv)
 	close_hw_render();
 	dlclose(core_handle);
 	close(input_fd);
-	if (buzzer_fd >= 0)
-		close(buzzer_fd);
 	close(fb_fd);
 	free(fb_frame);
 	free(fb_present);
