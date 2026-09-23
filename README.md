@@ -61,9 +61,17 @@ sudo modprobe snd-soc-davinci-mcasp
 sudo modprobe snd-soc-simple-card
 sudo modprobe snd-soc-max98357a
 aplay -l
-dmesg | grep -iE 'sound|mcasp|max98357|simple-card'
+# Expect: card 0: GamePupMAX98357 [GamePup-MAX98357], device 0: ...
+
+# If aplay -l is still empty, check probe state:
+cat /sys/kernel/debug/devices_deferred 2>/dev/null
+ls /sys/bus/platform/drivers/davinci-mcasp/
+ls /sys/devices/platform/ | grep -iE 'sound|mcasp|max98'
+dmesg | grep -iE 'sound|mcasp|max98357|simple-card|parse error'
 ```
 
+SD_MODE is held high by a `gpio-leds` hog on P1.36 (`gamepup:max98357-sdmode`).
+If you prefer, you may instead hard-wire SD_MODE to 3.3 V and ignore that LED.
 Capture example (after a future capture-capable card is present):
 
 ```sh

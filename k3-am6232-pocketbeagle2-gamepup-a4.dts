@@ -105,14 +105,14 @@
 	/*
 	 * McASP2 I2S (SoC bit/frame master), 3.3 V peripherals:
 	 *   MAX98357A amp:  P2.11 BCLK, P2.10 LRCLK, P2.05 DIN (AXR0 TX)
-	 *   INMP441 mic SD on P2.07 (AXR1) is pinmuxed for later capture;
-	 *   simple-audio-card is playback-only (one codec per McASP).
-	 *   MAX98357 SD_MODE on P1.36A (GPIO mute).
+	 *   P2.07 AXR1 reserved for a future mic capture path.
+	 *   P1.36A holds SD_MODE high (gpio-leds hog) so the amp stays out
+	 *   of shutdown without blocking the maxim,max98357a probe.
 	 */
 	gamepup_mcasp2_pins: gamepup-mcasp2-pins {
 		pinctrl-single,pins = <
 			0x01d8 0x040008 /* P2.05 C15: MCASP2_AXR0 TX (amp DIN) */
-			0x01dc 0x040008 /* P2.07 E15: MCASP2_AXR1 RX (mic SD) */
+			0x01dc 0x040008 /* P2.07 E15: MCASP2_AXR1 (unused RX) */
 			0x0174 0x040002 /* P2.10 AD21: MCASP2_AFSX (LRCLK/WS) */
 			0x01d4 0x040008 /* P2.11 B15: MCASP2_ACLKX (BCLK/SCK) */
 		>;
