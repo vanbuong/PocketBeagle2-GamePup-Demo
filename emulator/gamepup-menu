@@ -27,6 +27,7 @@ FRONTEND = "/usr/local/bin/gamepup-retro"
 GPU_BENCHMARK = "/usr/local/bin/gamepup-gpu-bench"
 HARDWARE_TEST = "/usr/local/bin/gamepup-hardware-test"
 VOICE_MEMO = "/usr/local/bin/gamepup-voice-memo"
+MUSIC_PLAYER = "/usr/local/bin/gamepup-music-player"
 ROM_IMPORT = "/usr/bin/sudo"
 ROM_IMPORT_HELPER = "/usr/local/libexec/gamepup-rom-import"
 ROM_IMPORT_STATUS = Path("/opt/gamepup/saves/rom-import-status")
@@ -333,7 +334,7 @@ def menu_items(games: list[Path], screen: str) -> list[str]:
     if screen == "benchmarks":
         return [label for label, _argument in GPU_BENCHMARKS] + ["BACK"]
     if screen == "tools":
-        return ["IMPORT USB ROMS >", "VOICE MEMO", "HARDWARE TEST", "BACK"]
+        return ["IMPORT USB ROMS >", "VOICE MEMO", "MUSIC PLAYER", "HARDWARE TEST", "BACK"]
     if screen == "second":
         return [
             "DISPLAY OFF" if OLED_DISABLED_FILE.exists() else "DISPLAY ON",
@@ -499,6 +500,17 @@ def launch_voice_memo():
         subprocess.run([VOICE_MEMO], check=False)
     except OSError as error:
         print(f"Unable to launch voice memo: {error}", file=sys.stderr)
+    finally:
+        silence_buzzer()
+    if running:
+        play_sound("exit")
+
+
+def launch_music_player():
+    try:
+        subprocess.run([MUSIC_PLAYER], check=False)
+    except OSError as error:
+        print(f"Unable to launch music player: {error}", file=sys.stderr)
     finally:
         silence_buzzer()
     if running:
@@ -945,6 +957,19 @@ def run_menu(games: list[Path]) -> int:
                             draw_menu(framebuffer, games, screen, selected[screen])
                             break
                         elif tool_index == 2:
+                            play_sound("select")
+                            os.close(input_fd)
+                            os.close(framebuffer)
+                            launch_music_player()
+                            if not running:
+                                return 0
+                            framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                            claim_display()
+                            input_fd = open_buttons()
+                            wait_for_launch_keys_to_release(input_fd)
+                            draw_menu(framebuffer, games, screen, selected[screen])
+                            break
+                        elif tool_index == 3:
                             play_sound("select")
                             os.close(input_fd)
                             os.close(framebuffer)

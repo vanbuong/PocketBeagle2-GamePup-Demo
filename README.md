@@ -467,6 +467,24 @@ I2S path. Clips are stored as WAV files under `/opt/gamepup/voice-memos/`.
 Max length is 120 seconds at 48 kHz stereo S32_LE. Requires `alsa-utils`
 (`arecord` / `aplay`).
 
+## Music player
+
+Open `TOOLS > MUSIC PLAYER` to browse `/opt/gamepup/music/` and play tracks
+through the MAX98357 (mpv → ALSA). Subfolders are supported. Copy
+`mp3` / `ogg` / `flac` / `wav` / `m4a` / `aac` / `opus` files onto the board
+(or into that folder via SSH/USB).
+
+| Control | Library | Now playing |
+|---|---|---|
+| Up / Down | Move selection | Seek −15s / +15s |
+| A / Start | Open folder or play file | Pause / resume |
+| B | Parent folder / exit | Back to library (keeps playing) |
+| Left / Right | Parent (Left) / seek if playing | Seek −5s / +5s |
+| Y / X | Previous / next track | Previous / next track |
+| Select | Stop | Stop |
+
+Requires `mpv`. Override the ALSA device with `GAMEPUP_ALSA_DEVICE` if needed.
+
 ## Hardware tester
 
 Open `TOOLS > HARDWARE TEST` to check all ten controls. A button turns yellow

@@ -1,0 +1,699 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Music player with folder explorer for GamePup I2S (MAX98357 via ALSA/mpv)."""
+
+from array import array
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+
+WIDTH = 320
+HEIGHT = 240
+FRAMEBUFFER = "/dev/fb0"
+INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
+INPUT_FALLBACK = "/dev/input/event0"
+MUSIC_ROOT = Path("/opt/gamepup/music")
+MPV_SOCKET = Path("/run/gamepup/mpv-music.sock")
+AUDIO_EXTENSIONS = {".mp3", ".ogg", ".flac", ".wav", ".m4a", ".aac", ".opus", ".wma"}
+SEEK_STEP = 5
+SEEK_STEP_FAST = 15
+EVENT = struct.Struct("@llHHi")
+EV_KEY = 1
+EVIOCGRAB = 0x40044590
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
+
+KEY_ESC = 1
+KEY_1 = 2
+KEY_5 = 6
+KEY_TAB = 15
+KEY_P = 25
+KEY_ENTER = 28
+KEY_LEFT = 105
+KEY_RIGHT = 106
+KEY_UP = 103
+KEY_DOWN = 108
+
+BLACK = 0x000000
+WHITE = 0xF4F4E8
+GREEN = 0x42D65C
+DARK_GREEN = 0x123D22
+YELLOW = 0xF4D35E
+BLUE = 0x174A70
+GRAY = 0x708078
+RED = 0xE85D5D
+CYAN = 0x40D8D0
+
+FONT = {
+    " ": ("00000",) * 7,
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01111", "10000", "10000", "10111", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
+    "6": ("01110", "10000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "01110"),
+    "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
+    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
+    "[": ("01110", "01000", "01000", "01000", "01000", "01000", "01110"),
+    "]": ("01110", "00010", "00010", "00010", "00010", "00010", "01110"),
+    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
+    "?": ("01110", "10001", "00001", "00010", "00100", "00000", "00100"),
+}
+
+running = True
+_fb_info = None
+
+
+def stop_handler(_signum, _frame):
+    global running
+    running = False
+
+
+def fill_rect(canvas, x, y, width, height, color):
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(WIDTH, x + width), min(HEIGHT, y + height)
+    row = array("I", [color]) * max(0, x1 - x0)
+    for target_y in range(y0, y1):
+        canvas[target_y * WIDTH + x0:target_y * WIDTH + x1] = row
+
+
+def draw_text(canvas, x, y, text, color, scale=1):
+    cursor = x
+    for character in text.upper():
+        glyph = FONT.get(character, FONT["?"])
+        for glyph_y, bits in enumerate(glyph):
+            for glyph_x, bit in enumerate(bits):
+                if bit == "1":
+                    fill_rect(canvas, cursor + glyph_x * scale,
+                              y + glyph_y * scale, scale, scale, color)
+        cursor += 6 * scale
+
+
+def read_fb_info(framebuffer):
+    global _fb_info
+    if _fb_info is not None:
+        return _fb_info
+    var = array("B", [0]) * 160
+    fix = array("B", [0]) * 128
+    fcntl.ioctl(framebuffer, FBIOGET_VSCREENINFO, var, True)
+    fcntl.ioctl(framebuffer, FBIOGET_FSCREENINFO, fix, True)
+    xres = int.from_bytes(var[0:4], "little")
+    yres = int.from_bytes(var[4:8], "little")
+    bpp = int.from_bytes(var[24:28], "little")
+    try:
+        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+    except (OSError, ValueError):
+        stride = xres * (bpp // 8)
+    if bpp not in (16, 32):
+        raise OSError(f"Expected 16- or 32-bit framebuffer, got {bpp} bpp")
+    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+        raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
+    return _fb_info
+
+
+def present_canvas(framebuffer, canvas):
+    info = read_fb_info(framebuffer)
+    stride = info["stride"]
+    height = info["height"]
+    width = info["width"]
+    bpp = info["bpp"]
+    frame = bytearray(stride * height)
+
+    def put_pixel(dst_x, dst_y, color):
+        if bpp == 16:
+            red = (color >> 16) & 0xff
+            green = (color >> 8) & 0xff
+            blue = color & 0xff
+            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+            offset = dst_y * stride + dst_x * 2
+            frame[offset:offset + 2] = int(value).to_bytes(2, "little")
+        else:
+            offset = dst_y * stride + dst_x * 4
+            frame[offset:offset + 4] = int(color).to_bytes(4, "little")
+
+    if width == WIDTH and height == HEIGHT:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(x, y, int(src[y * WIDTH + x]))
+    else:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(y, WIDTH - 1 - x, int(src[y * WIDTH + x]))
+    view = memoryview(frame)
+    written = 0
+    while written < len(frame):
+        written += os.pwrite(framebuffer, view[written:], written)
+
+
+def open_buttons():
+    for path in (INPUT, INPUT_FALLBACK):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            fcntl.ioctl(fd, EVIOCGRAB, 1)
+        except OSError as error:
+            print(f"EVIOCGRAB {path}: {error}", file=sys.stderr)
+        return fd
+    raise OSError("No GamePup button input device found")
+
+
+def alsa_device():
+    env = os.environ.get("GAMEPUP_ALSA_DEVICE", "").strip()
+    if env:
+        return env
+    try:
+        listing = subprocess.check_output(
+            ["aplay", "-l"], text=True, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return "default"
+    for line in listing.splitlines():
+        if re.search(r"GamePup|MAX98357|I2S", line, re.IGNORECASE):
+            match = re.search(r"card (\d+):", line)
+            if match:
+                return f"plughw:{match.group(1)},0"
+    return "default"
+
+
+def ensure_music_root():
+    MUSIC_ROOT.mkdir(parents=True, exist_ok=True)
+    readme = MUSIC_ROOT / "README.txt"
+    if not readme.exists():
+        readme.write_text(
+            "Place music files here (mp3, ogg, flac, wav, m4a, aac, opus).\n"
+            "Subfolders are supported in the GamePup music player.\n",
+            encoding="utf-8")
+
+
+def is_audio(path: Path) -> bool:
+    return path.is_file() and path.suffix.casefold() in AUDIO_EXTENSIONS
+
+
+def list_entries(directory: Path):
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return []
+    dirs = sorted(
+        [path for path in children if path.is_dir() and not path.name.startswith(".")],
+        key=lambda path: path.name.casefold())
+    files = sorted(
+        [path for path in children if is_audio(path)],
+        key=lambda path: path.name.casefold())
+    return dirs + files
+
+
+def audio_files_in(directory: Path):
+    return [path for path in list_entries(directory) if is_audio(path)]
+
+
+def format_time(seconds):
+    if seconds is None or seconds < 0:
+        return "--:--"
+    total = int(seconds)
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def relative_label(path: Path, cwd: Path) -> str:
+    if path.is_dir():
+        return f"[{path.name}]/"[:46]
+    try:
+        rel = path.relative_to(cwd)
+    except ValueError:
+        rel = path.name
+    return str(rel)[:46]
+
+
+def wait_key(input_fd, timeout=0.1):
+    readable, _, _ = select.select([input_fd], [], [], timeout)
+    if not readable:
+        return None
+    data = os.read(input_fd, EVENT.size * 32)
+    pressed = None
+    for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+        _seconds, _micros, event_type, code, value = EVENT.unpack_from(data, offset)
+        if event_type == EV_KEY and value == 1:
+            pressed = code
+    return pressed
+
+
+def drain_keys(input_fd):
+    while True:
+        readable, _, _ = select.select([input_fd], [], [], 0)
+        if not readable:
+            return
+        try:
+            os.read(input_fd, EVENT.size * 64)
+        except OSError:
+            return
+
+
+class MpvPlayer:
+    def __init__(self, device: str):
+        self.device = device
+        self.process = None
+        self.playlist = []
+        self.index = -1
+
+    def _socket_path(self) -> Path:
+        MPV_SOCKET.parent.mkdir(parents=True, exist_ok=True)
+        if MPV_SOCKET.exists():
+            try:
+                MPV_SOCKET.unlink()
+            except OSError:
+                pass
+        return MPV_SOCKET
+
+    def start(self):
+        if self.process and self.process.poll() is None:
+            return
+        socket_path = self._socket_path()
+        audio_device = self.device
+        if not audio_device.startswith("alsa/"):
+            audio_device = f"alsa/{audio_device}"
+        command = [
+            "mpv",
+            "--idle=yes",
+            "--no-video",
+            "--force-window=no",
+            "--really-quiet",
+            "--no-terminal",
+            "--no-input-default-bindings",
+            "--keep-open=no",
+            f"--ao=alsa",
+            f"--audio-device={audio_device}",
+            f"--input-ipc-server={socket_path}",
+        ]
+        try:
+            self.process = subprocess.Popen(
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as error:
+            raise RuntimeError(f"mpv unavailable: {error}") from error
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if socket_path.exists():
+                return
+            if self.process.poll() is not None:
+                break
+            time.sleep(0.05)
+        self.stop()
+        raise RuntimeError("mpv IPC socket did not appear")
+
+    def stop(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=1)
+        self.process = None
+        self.playlist = []
+        self.index = -1
+        try:
+            MPV_SOCKET.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _rpc(self, command, timeout=0.4):
+        if not MPV_SOCKET.exists():
+            return None
+        payload = (json.dumps({"command": command}) + "\n").encode("utf-8")
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect(str(MPV_SOCKET))
+                sock.sendall(payload)
+                chunks = []
+                while True:
+                    try:
+                        data = sock.recv(4096)
+                    except socket.timeout:
+                        break
+                    if not data:
+                        break
+                    chunks.append(data)
+                    if b"\n" in data:
+                        break
+        except OSError:
+            return None
+        if not chunks:
+            return None
+        line = b"".join(chunks).split(b"\n", 1)[0]
+        try:
+            return json.loads(line.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            return None
+
+    def command(self, *args):
+        return self._rpc(list(args))
+
+    def get_property(self, name):
+        response = self.command("get_property", name)
+        if not response or response.get("error") not in (None, "success"):
+            return None
+        return response.get("data")
+
+    def active(self):
+        return self.process is not None and self.process.poll() is None
+
+    def play_list(self, tracks: list[Path], start_index: int = 0):
+        if not tracks:
+            return False
+        self.start()
+        self.playlist = list(tracks)
+        self.index = max(0, min(start_index, len(tracks) - 1))
+        self.command("loadfile", str(self.playlist[0]), "replace")
+        for track in self.playlist[1:]:
+            self.command("loadfile", str(track), "append")
+        self.command("playlist-play-index", self.index)
+        self.command("set_property", "pause", False)
+        return True
+
+    def toggle_pause(self):
+        self.command("cycle", "pause")
+
+    def seek(self, seconds: int):
+        self.command("seek", seconds, "relative")
+
+    def next_track(self):
+        if not self.playlist:
+            return
+        if self.index + 1 < len(self.playlist):
+            self.index += 1
+            self.command("playlist-next", "weak")
+        else:
+            self.command("playlist-play-index", self.index)
+
+    def prev_track(self):
+        if not self.playlist:
+            return
+        position = self.get_property("time-pos") or 0
+        if isinstance(position, (int, float)) and position > 3 and self.index >= 0:
+            self.command("seek", 0, "absolute")
+            return
+        if self.index > 0:
+            self.index -= 1
+            self.command("playlist-prev", "weak")
+        else:
+            self.command("seek", 0, "absolute")
+
+    def stop_playback(self):
+        self.command("stop")
+        self.playlist = []
+        self.index = -1
+
+    def sync_index(self):
+        value = self.get_property("playlist-pos")
+        if isinstance(value, int) and 0 <= value < len(self.playlist):
+            self.index = value
+
+    def status(self):
+        self.sync_index()
+        paused = bool(self.get_property("pause"))
+        position = self.get_property("time-pos")
+        duration = self.get_property("duration")
+        path = None
+        if 0 <= self.index < len(self.playlist):
+            path = self.playlist[self.index]
+        else:
+            media = self.get_property("path")
+            if isinstance(media, str):
+                path = Path(media)
+        idle = self.get_property("idle-active")
+        playing = self.active() and not idle and path is not None
+        return {
+            "playing": playing,
+            "paused": paused if playing else False,
+            "position": position if isinstance(position, (int, float)) else 0,
+            "duration": duration if isinstance(duration, (int, float)) else 0,
+            "path": path,
+            "index": self.index,
+            "count": len(self.playlist),
+        }
+
+
+def draw_chrome(canvas, title, footer):
+    fill_rect(canvas, 0, 0, WIDTH, HEIGHT, BLACK)
+    title_width = (len(title) * 6 - 1) * 2
+    draw_text(canvas, (WIDTH - title_width) // 2, 3, title, GREEN, 2)
+    draw_text(canvas, 4, 20, footer, GRAY)
+    fill_rect(canvas, 3, 30, WIDTH - 6, 1, DARK_GREEN)
+
+
+def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlayer,
+                 status_text: str):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    rel = "." if cwd == MUSIC_ROOT else str(cwd.relative_to(MUSIC_ROOT))
+    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:PREV/NEXT B:BACK")
+    draw_text(canvas, 8, 34, f"/{rel}"[:48], CYAN)
+
+    rows = []
+    if cwd != MUSIC_ROOT:
+        rows.append(("..", None))
+    for entry in entries:
+        rows.append((relative_label(entry, cwd), entry))
+    if not rows:
+        rows.append(("(EMPTY FOLDER)", None))
+
+    selected = max(0, min(selected, len(rows) - 1))
+    visible = 12
+    first = max(0, min(selected - visible // 2, len(rows) - visible))
+    for row_index, item_index in enumerate(range(first, min(first + visible, len(rows)))):
+        y = 48 + row_index * 11
+        label, _path = rows[item_index]
+        if item_index == selected:
+            fill_rect(canvas, 2, y - 2, WIDTH - 4, 10, BLUE)
+            color = YELLOW
+        else:
+            color = WHITE
+        draw_text(canvas, 8, y, label[:48], color)
+
+    info = player.status()
+    fill_rect(canvas, 3, 196, WIDTH - 6, 1, DARK_GREEN)
+    if info["playing"] and info["path"] is not None:
+        state = "PAUSE" if info["paused"] else "PLAY"
+        draw_text(canvas, 8, 202,
+                  f"{state} {info['path'].stem[:28]}"[:48], GREEN)
+        draw_text(canvas, 8, 216,
+                  f"{format_time(info['position'])}/{format_time(info['duration'])} "
+                  f"{info['index'] + 1}/{info['count']}", GRAY)
+        if info["duration"] > 0:
+            width = int((WIDTH - 16) * min(1.0, info["position"] / info["duration"]))
+            fill_rect(canvas, 8, 230, max(1, width), 4, GREEN)
+    else:
+        draw_text(canvas, 8, 202, status_text[:48], GRAY)
+        draw_text(canvas, 8, 216, "LT/RT SEEK  SEL STOP  A PLAY/PAUSE", GRAY)
+    present_canvas(framebuffer, canvas)
+    return rows, selected
+
+
+def draw_now_playing(framebuffer, player: MpvPlayer):
+    info = player.status()
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    draw_chrome(canvas, "NOW PLAYING", "A:PAUSE Y/X:TRK LT/RT:SEEK")
+    path = info["path"]
+    title = path.stem if path else "NO TRACK"
+    draw_text(canvas, 16, 56, title[:44], WHITE)
+    if path is not None:
+        draw_text(canvas, 16, 76, path.suffix.casefold()[1:].upper()[:8], GRAY)
+    state = "PAUSED" if info["paused"] else "PLAYING"
+    draw_text(canvas, 16, 100, state, YELLOW if info["paused"] else GREEN)
+    draw_text(canvas, 16, 124,
+              f"{format_time(info['position'])} / {format_time(info['duration'])}",
+              WHITE)
+    draw_text(canvas, 16, 144, f"TRACK {info['index'] + 1} / {max(1, info['count'])}",
+              GRAY)
+    if info["duration"] > 0:
+        fill_rect(canvas, 16, 170, WIDTH - 32, 10, DARK_GREEN)
+        width = int((WIDTH - 32) * min(1.0, info["position"] / info["duration"]))
+        fill_rect(canvas, 16, 170, max(1, width), 10, GREEN)
+    draw_text(canvas, 8, 200, "B:LIBRARY  SEL:STOP", GRAY)
+    draw_text(canvas, 8, 216, "UP/DN: SEEK +/-15S", GRAY)
+    present_canvas(framebuffer, canvas)
+
+
+def run():
+    ensure_music_root()
+    device = alsa_device()
+    print(f"Music player ALSA device: {device}", file=sys.stderr)
+    player = MpvPlayer(device)
+    try:
+        player.start()
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
+        print("Install mpv (alsa-utils recommended).", file=sys.stderr)
+        return 1
+
+    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+    input_fd = open_buttons()
+    cwd = MUSIC_ROOT
+    selected = 0
+    mode = "browser"
+    status = f"DEV {device}"[:48]
+
+    try:
+        while running:
+            if mode == "now":
+                info = player.status()
+                if not info["playing"]:
+                    mode = "browser"
+                    status = "PLAYBACK ENDED"
+                    continue
+                draw_now_playing(framebuffer, player)
+                code = wait_key(input_fd, 0.15)
+                if code is None:
+                    continue
+                if code in (KEY_TAB, KEY_1):
+                    player.toggle_pause()
+                elif code == KEY_5:
+                    player.stop_playback()
+                    mode = "browser"
+                    status = "STOPPED"
+                elif code == KEY_LEFT:
+                    player.seek(-SEEK_STEP)
+                elif code == KEY_RIGHT:
+                    player.seek(SEEK_STEP)
+                elif code == KEY_UP:
+                    player.seek(-SEEK_STEP_FAST)
+                elif code == KEY_DOWN:
+                    player.seek(SEEK_STEP_FAST)
+                elif code == KEY_P:
+                    player.prev_track()
+                elif code == KEY_ESC:
+                    player.next_track()
+                elif code == KEY_ENTER:
+                    mode = "browser"
+                    status = "PLAYING IN BACKGROUND"
+                continue
+
+            entries = list_entries(cwd)
+            rows, selected = draw_browser(
+                framebuffer, cwd, entries, selected, player, status)
+            code = wait_key(input_fd, 0.2)
+            if code is None:
+                continue
+            if code == KEY_UP:
+                selected = (selected - 1) % len(rows)
+            elif code == KEY_DOWN:
+                selected = (selected + 1) % len(rows)
+            elif code == KEY_LEFT:
+                if player.status()["playing"]:
+                    player.seek(-SEEK_STEP)
+                elif cwd != MUSIC_ROOT:
+                    cwd = cwd.parent
+                    selected = 0
+            elif code == KEY_RIGHT:
+                if player.status()["playing"]:
+                    player.seek(SEEK_STEP)
+            elif code == KEY_P:
+                player.prev_track()
+            elif code == KEY_ESC:
+                player.next_track()
+            elif code == KEY_5:
+                if player.status()["playing"]:
+                    player.stop_playback()
+                    status = "STOPPED"
+            elif code == KEY_ENTER:
+                if cwd == MUSIC_ROOT:
+                    break
+                cwd = cwd.parent
+                selected = 0
+            elif code in (KEY_TAB, KEY_1):
+                label, path = rows[selected]
+                if label == "..":
+                    if cwd != MUSIC_ROOT:
+                        cwd = cwd.parent
+                        selected = 0
+                    continue
+                if path is None:
+                    continue
+                if path.is_dir():
+                    cwd = path
+                    selected = 0
+                    continue
+                if is_audio(path):
+                    tracks = audio_files_in(path.parent)
+                    try:
+                        index = tracks.index(path)
+                    except ValueError:
+                        tracks = [path]
+                        index = 0
+                    if player.play_list(tracks, index):
+                        mode = "now"
+                        status = f"PLAY {path.name}"[:48]
+                    else:
+                        status = "PLAY FAILED"
+    finally:
+        player.stop()
+        try:
+            os.close(input_fd)
+        except OSError:
+            pass
+        try:
+            os.close(framebuffer)
+        except OSError:
+            pass
+    return 0
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--list":
+        ensure_music_root()
+        for path in sorted(MUSIC_ROOT.rglob("*")):
+            if is_audio(path):
+                print(path)
+        return 0
+    return run()
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, stop_handler)
+    signal.signal(signal.SIGTERM, stop_handler)
+    raise SystemExit(main())
