@@ -55,6 +55,12 @@ arecord -D plughw:GamePupI2S -c 2 -r 48000 -f S32_LE -d 5 /tmp/mic.wav
 aplay -D plughw:GamePupI2S /tmp/mic.wav
 ```
 
+`TOOLS > VOICE MEMO` records and plays clips through this card. Memos are stored
+as WAV files under `/opt/gamepup/voice-memos/` (`memo-YYYYMMDD-HHMMSS.wav`).
+In the tool: **A** starts/stops recording or plays a memo, **Select** deletes,
+**B** goes back. Max length is 120 seconds. Override the ALSA device with
+`GAMEPUP_ALSA_DEVICE` if needed.
+
 ## Screenshots
 
 The images below are native captures from the original 128x160 GamePup LCD.
@@ -443,6 +449,23 @@ escape sequences) from painting over the menu or game. Stopping the service
 reattaches the framebuffer console; SSH and the serial console are unaffected
 throughout. If you launch the menu by hand, run
 `sudo /usr/local/libexec/gamepup-fbcon detach` first.
+
+## Voice memo
+
+Open `TOOLS > VOICE MEMO` to record and play clips on the MAX98357 / INMP441
+I2S path. Clips are stored as WAV files under `/opt/gamepup/voice-memos/`.
+
+| Control | Action |
+|---|---|
+| A / Start on **+ NEW RECORDING** | Start recording |
+| A / Start while recording | Stop and save |
+| B while recording | Cancel |
+| A / Start on a memo | Play |
+| Select on a memo | Delete (confirm with A) |
+| B | Back / exit |
+
+Max length is 120 seconds at 48 kHz stereo S32_LE. Requires `alsa-utils`
+(`arecord` / `aplay`).
 
 ## Hardware tester
 
