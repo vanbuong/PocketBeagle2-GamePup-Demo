@@ -53,8 +53,10 @@ if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
 		/etc/modules-load.d/gamepup-alsa.conf
 	modprobe snd-soc-davinci-mcasp 2>/dev/null || true
 	modprobe snd-soc-max98357a 2>/dev/null || true
-	modprobe snd-soc-simple-card 2>/dev/null || true
+	modprobe snd-soc-audio-graph-card 2>/dev/null || true
 	if [ -e /sys/bus/platform/devices/sound-gamepup ]; then
+		echo sound-gamepup > /sys/bus/platform/drivers/asoc-audio-graph-card/unbind 2>/dev/null || true
+		echo sound-gamepup > /sys/bus/platform/drivers/asoc-audio-graph-card/bind 2>/dev/null || true
 		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/unbind 2>/dev/null || true
 		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/bind 2>/dev/null || true
 	fi
