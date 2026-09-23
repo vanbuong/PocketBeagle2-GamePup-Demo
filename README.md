@@ -18,6 +18,7 @@ This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 - both eye LEDs;
 - PWM buzzer (menu beeps / hardware test);
 - MAX98357A I2S speaker amp on McASP2 (PCM game audio, 3.3 V);
+- INMP441 I2S MEMS microphone on McASP2 (shared clocks, 3.3 V);
 - the Click socket's SPI device (`spidev`);
 - SH1106 1.3" I2C OLED status dashboard and EC11 encoder on the Click socket;
 - a safe FAT32 USB ROM inbox alongside USB networking and serial;
@@ -26,20 +27,33 @@ This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 The cape's USB host port and I2C2 bus are already enabled by the stock PB2
 device tree.
 
-### MAX98357A wiring (3.3 V)
+### I2S audio wiring (3.3 V)
 
-| Amp pin | PocketBeagle 2 | Function |
-|---|---|---|
-| BCLK | P2.11 | McASP2 bit clock |
-| LRCLK / LRC | P2.10 | McASP2 frame sync |
-| DIN | P2.05 | McASP2 AXR0 (playback data) |
-| SD_MODE | P1.36 | GPIO mute (driven by the codec driver) |
-| VIN | 3.3 V | Amp supply |
-| GND | GND | Ground |
+McASP2 is bit-clock and frame master. The amp and mic share BCLK and LRCLK.
 
-`gamepup-retro` plays stereo S16_LE PCM through ALSA card `GamePup-MAX98357`.
-Override the device with `GAMEPUP_ALSA_DEVICE` if needed. Menu UI beeps still
-use the on-cape PWM buzzer.
+| Device | Signal | Header | McASP2 |
+|---|---|---|---|
+| MAX98357A | BCLK | P2.11 | ACLKX |
+| MAX98357A | LRCLK | P2.10 | AFSX |
+| MAX98357A | DIN | P2.05 | AXR0 (TX) |
+| MAX98357A | SD_MODE | P1.36 | GPIO1_28 |
+| MAX98357A | VIN / GND | 3.3 V / GND | — |
+| INMP441 | SCK | P2.11 | (shared BCLK) |
+| INMP441 | WS | P2.10 | (shared LRCLK) |
+| INMP441 | SD | P2.07 | AXR1 (RX) |
+| INMP441 | L/R | GND | left channel |
+| INMP441 | VDD / GND | 3.3 V / GND | — |
+
+ALSA card name: `GamePup-I2S` (playback + capture). `gamepup-retro` plays
+stereo S16_LE on the playback link. Override with `GAMEPUP_ALSA_DEVICE` if
+needed. Menu UI beeps still use the on-cape PWM buzzer.
+
+Capture example (24-bit data in 32-bit slots):
+
+```sh
+arecord -D plughw:GamePupI2S -c 2 -r 48000 -f S32_LE -d 5 /tmp/mic.wav
+aplay -D plughw:GamePupI2S /tmp/mic.wav
+```
 
 ## Screenshots
 
@@ -192,7 +206,7 @@ the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
 - LEDs: `/sys/class/leds/gamepup:left-eye` and
   `/sys/class/leds/gamepup:right-eye`;
 - buzzer: an input device named `gamepup-buzzer` or `pwm-beeper`;
-- MAX98357A: ALSA card `GamePup-MAX98357` (McASP2 I2S);
+- I2S audio: ALSA card `GamePup-I2S` (MAX98357A playback + INMP441 capture);
 - EEPROM: `/sys/bus/i2c/devices/2-0057/eeprom`.
 
 When the PocketBeagle 2 device USB port is connected to a computer, the
