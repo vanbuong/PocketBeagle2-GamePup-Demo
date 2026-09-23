@@ -59,20 +59,30 @@ live (the card node is `sound-gamepup`, not `sound`):
 
 ```sh
 cat /proc/device-tree/chosen/overlays/gamepup-a4-audio
-# expect: max98357-playback-v3-sound-gamepup
+# expect: max98357-playback-v4-dai-link
 
-ls /proc/device-tree/sound-gamepup /proc/device-tree/max98357a
-# both must exist — if you only see /proc/device-tree/sound, the old dtbo is still loaded
+ls /proc/device-tree/sound-gamepup /proc/device-tree/gamepup-max98357a
+# both must exist — if you only see /proc/device-tree/sound or max98357a,
+# the old dtbo is still loaded
 
-sudo modprobe snd-soc-davinci-mcasp snd-soc-simple-card snd-soc-max98357a
+# McASP2 must be enabled (platform name is address-based, not "mcasp"):
+cat /proc/device-tree/bus@f0000/audio-controller@2b20000/status
+# expect: okay
+ls /sys/bus/platform/drivers/davinci-mcasp/
+# expect: 2b20000.audio-controller among bound devices
+
+sudo modprobe snd-soc-davinci-mcasp snd-soc-max98357a snd-soc-simple-card
+# re-trigger card bind if it probed before the codec/CPU DAIs existed:
+echo sound-gamepup | sudo tee /sys/bus/platform/drivers/asoc-simple-card/unbind 2>/dev/null
+echo sound-gamepup | sudo tee /sys/bus/platform/drivers/asoc-simple-card/bind 2>/dev/null
 aplay -l
 # Expect: card 0: GamePupMAX98357 [GamePup-MAX98357], device 0: ...
 
 # If aplay -l is still empty:
 cat /sys/kernel/debug/devices_deferred 2>/dev/null
-ls /sys/bus/platform/drivers/davinci-mcasp/
-ls /sys/devices/platform/ | grep -iE 'sound|mcasp|max98'
-dmesg | grep -iE 'sound|mcasp|max98357|simple-card'
+ls /sys/devices/platform/ | grep -iE 'sound|max98|2b20000'
+dmesg | grep -iE 'sound|mcasp|max98357|simple-card|2b20000'
+ls /proc/device-tree/sound-gamepup/simple-audio-card,dai-link/
 grep -n gamepup /boot/extlinux/extlinux.conf
 ls -l /boot/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4.dtbo
 ```

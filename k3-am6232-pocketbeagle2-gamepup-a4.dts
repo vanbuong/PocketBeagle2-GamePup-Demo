@@ -22,7 +22,7 @@
 	overlays {
 		gamepup-a4 = "PocketBeagle 2 GamePup A4";
 		/* Bump this string when audio DT changes; check via /proc. */
-		gamepup-a4-audio = "max98357-playback-v3-sound-gamepup";
+		gamepup-a4-audio = "max98357-playback-v4-dai-link";
 	};
 };
 
@@ -111,12 +111,16 @@
 	 *   P1.36A holds SD_MODE high (gpio-leds hog) so the amp stays out
 	 *   of shutdown without blocking the maxim,max98357a probe.
 	 */
+	/*
+	 * PIN_INPUT | mux = 0x050000 | mode (RXACTIVE + PULL_DISABLE).
+	 * McASP clocks need the input path even when the SoC is master.
+	 */
 	gamepup_mcasp2_pins: gamepup-mcasp2-pins {
 		pinctrl-single,pins = <
-			0x01d8 0x040008 /* P2.05 C15: MCASP2_AXR0 TX (amp DIN) */
-			0x01dc 0x040008 /* P2.07 E15: MCASP2_AXR1 (unused RX) */
-			0x0174 0x040002 /* P2.10 AD21: MCASP2_AFSX (LRCLK/WS) */
-			0x01d4 0x040008 /* P2.11 B15: MCASP2_ACLKX (BCLK/SCK) */
+			0x01d8 0x050008 /* P2.05 C15: MCASP2_AXR0 TX (amp DIN) */
+			0x01dc 0x050008 /* P2.07 E15: MCASP2_AXR1 (unused RX) */
+			0x0174 0x050002 /* P2.10 AD21: MCASP2_AFSX (LRCLK/WS) */
+			0x01d4 0x050008 /* P2.11 B15: MCASP2_ACLKX (BCLK/SCK) */
 		>;
 	};
 
@@ -193,6 +197,11 @@
 	};
 };
 
+/*
+ * Same shape as BeaglePlay HDMI McASP (playback-only serializers, no
+ * tx/rx-num-evt).  Those FIFO knobs have been observed to upset UDMA PCM
+ * registration on AM62 when set without a matching AFIFO consumer.
+ */
 &mcasp2 {
 	#sound-dai-cells = <0>;
 	pinctrl-names = "default";
@@ -200,6 +209,7 @@
 	status = "okay";
 	op-mode = <0>; /* DAVINCI_MCASP_IIS_MODE */
 	tdm-slots = <2>;
+	auxclk-fs-ratio = <256>;
 	/* AXR0 = TX (MAX98357).  Remaining serializers inactive. */
 	serial-dir = <
 		1 0 0 0
@@ -207,9 +217,6 @@
 		0 0 0 0
 		0 0 0 0
 	>;
-	tx-num-evt = <1>;
-	rx-num-evt = <0>;
-	auxclk-fs-ratio = <256>;
 };
 
 &{/} {
@@ -219,9 +226,10 @@
 	 * registers and simple-audio-card stays deferred forever with
 	 * modules loaded but aplay -l empty.  Hold SD_MODE high separately.
 	 */
-	gamepup_max98357a: max98357a {
+	gamepup_max98357a: gamepup-max98357a {
 		compatible = "maxim,max98357a";
 		#sound-dai-cells = <0>;
+		status = "okay";
 	};
 
 	gamepup-max98357-sdmode {
@@ -238,23 +246,30 @@
 
 	/*
 	 * Unique node name avoids merging with any base-board "sound" stub.
-	 * Single CPU↔codec link only (simple-audio-card cannot share McASP
-	 * across two codecs).
+	 * One dai-link only: simple-audio-card cannot attach two codecs to
+	 * one McASP (that needs audio-graph).  Use a dai-link child so the driver
+	 * looks for child names "cpu"/"codec" (not "simple-audio-card,codec");
+	 * a missing codec child is the -ENODEV "parse error" path.
 	 */
 	gamepup_sound: sound-gamepup {
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "GamePup-MAX98357";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,bitclock-master = <&gamepup_sound_cpu>;
-		simple-audio-card,frame-master = <&gamepup_sound_cpu>;
+		status = "okay";
 
-		gamepup_sound_cpu: simple-audio-card,cpu {
-			sound-dai = <&mcasp2>;
-			system-clock-direction-out;
-		};
+		simple-audio-card,dai-link {
+			format = "i2s";
+			bitclock-master = <&gamepup_sound_cpu>;
+			frame-master = <&gamepup_sound_cpu>;
+			playback-only;
 
-		simple-audio-card,codec {
-			sound-dai = <&gamepup_max98357a>;
+			gamepup_sound_cpu: cpu {
+				sound-dai = <&mcasp2>;
+				system-clock-direction-out;
+			};
+
+			codec {
+				sound-dai = <&gamepup_max98357a>;
+			};
 		};
 	};
 

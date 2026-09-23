@@ -59,8 +59,13 @@ if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
 	install -m 0644 "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" \
 		/etc/modules-load.d/gamepup-alsa.conf
 	modprobe snd-soc-davinci-mcasp 2>/dev/null || true
-	modprobe snd-soc-simple-card 2>/dev/null || true
 	modprobe snd-soc-max98357a 2>/dev/null || true
+	modprobe snd-soc-simple-card 2>/dev/null || true
+	# Re-bind if the card probed before both DAIs were registered.
+	if [ -e /sys/bus/platform/devices/sound-gamepup ]; then
+		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/unbind 2>/dev/null || true
+		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/bind 2>/dev/null || true
+	fi
 fi
 
 # Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
@@ -101,7 +106,8 @@ if [ -f "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" ]; then
 	echo "After reboot verify audio DT with:"
 	echo "  cat /proc/device-tree/chosen/overlays/gamepup-a4-audio"
 	echo "  ls /proc/device-tree/sound-gamepup"
-	echo "  ls /proc/device-tree/max98357a"
+	echo "  ls /proc/device-tree/gamepup-max98357a"
+	echo "  cat /proc/device-tree/bus@f0000/audio-controller@2b20000/status"
 fi
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then
