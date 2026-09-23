@@ -198,40 +198,48 @@
 	status = "okay";
 	op-mode = <0>; /* DAVINCI_MCASP_IIS_MODE */
 	tdm-slots = <2>;
-	/*
-	 * AXR0 = TX (MAX98357).  AXR1 stays RX-capable in the pinmux for an
-	 * INMP441, but simple-audio-card cannot attach two codecs to one
-	 * McASP (that needs audio-graph / DPCM).  Ship playback-only for a
-	 * reliable ALSA card; capture can be added later with graph-card2.
-	 */
+	/* AXR0 = TX (MAX98357).  Remaining serializers inactive. */
 	serial-dir = <
 		1 0 0 0
 		0 0 0 0
 		0 0 0 0
 		0 0 0 0
 	>;
-	tx-num-evt = <0>;
+	tx-num-evt = <1>;
 	rx-num-evt = <0>;
 	auxclk-fs-ratio = <256>;
 };
 
 &{/} {
+	/*
+	 * Do not pass sdmode-gpios to maxim,max98357a: if GPIO1_28 cannot be
+	 * claimed (common when epwm2 still owns P1.36), the codec never
+	 * registers and simple-audio-card stays deferred forever with
+	 * modules loaded but aplay -l empty.  Hold SD_MODE high separately.
+	 */
 	gamepup_max98357a: max98357a {
 		compatible = "maxim,max98357a";
 		#sound-dai-cells = <0>;
+	};
+
+	gamepup-max98357-sdmode {
+		compatible = "gpio-leds";
 		pinctrl-names = "default";
 		pinctrl-0 = <&gamepup_max98357_sdmode_pin>;
-		/* Optional: omit sdmode-gpios and tie SD_MODE to 3.3V instead. */
-		sdmode-gpios = <&main_gpio1 28 0>;
-		sdmode-delay = <5>;
+
+		sdmode {
+			label = "gamepup:max98357-sdmode";
+			gpios = <&main_gpio1 28 0>;
+			default-state = "on";
+		};
 	};
 
 	/*
-	 * Single CPU↔codec link.  Do not add a second dai-link on &mcasp2:
-	 * simple-audio-card probe then fails with "parse error" / deferred
-	 * probe and ALSA never gets a card.
+	 * Unique node name avoids merging with any base-board "sound" stub.
+	 * Single CPU↔codec link only (simple-audio-card cannot share McASP
+	 * across two codecs).
 	 */
-	gamepup_sound: sound {
+	gamepup_sound: sound-gamepup {
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "GamePup-MAX98357";
 		simple-audio-card,format = "i2s";
