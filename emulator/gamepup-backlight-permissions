@@ -4,15 +4,39 @@
 
 set -eu
 
-backlight=/sys/class/backlight/backlight-gamepup/brightness
+resolve_backlight() {
+	for candidate in \
+		/sys/class/backlight/backlight-gamepup/brightness \
+		/sys/class/backlight/lcd-backlight/brightness
+	do
+		if [ -e "$candidate" ]; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+	for candidate in /sys/class/backlight/*/brightness; do
+		if [ -e "$candidate" ]; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+	return 1
+}
+
+backlight=
+if ! backlight=$(resolve_backlight); then
+	backlight=
+fi
 left_eye=/sys/class/leds/gamepup:left-eye/brightness
 right_eye=/sys/class/leds/gamepup:right-eye/brightness
 
 case "${1:-}" in
 	grant)
-		if [ -e "$backlight" ]; then
+		if [ -n "$backlight" ]; then
 			chgrp video "$backlight"
 			chmod 0664 "$backlight"
+		else
+			echo "gamepup-backlight-permissions: no backlight sysfs node found" >&2
 		fi
 		for brightness in "$left_eye" "$right_eye"; do
 			[ ! -e "$brightness" ] || chgrp input "$brightness"
@@ -20,7 +44,11 @@ case "${1:-}" in
 		done
 		;;
 	revoke)
-		for brightness in "$backlight" "$left_eye" "$right_eye"; do
+		if [ -n "$backlight" ]; then
+			chgrp root "$backlight" 2>/dev/null || true
+			chmod 0644 "$backlight" 2>/dev/null || true
+		fi
+		for brightness in "$left_eye" "$right_eye"; do
 			[ ! -e "$brightness" ] || chgrp root "$brightness"
 			[ ! -e "$brightness" ] || chmod 0644 "$brightness"
 		done

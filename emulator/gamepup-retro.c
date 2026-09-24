@@ -33,7 +33,7 @@
 #include "libretro.h"
 
 #define DEFAULT_CORE "/usr/local/lib/libretro/gambatte_libretro.so"
-#define DEFAULT_INPUT "/dev/input/event0"
+#define DEFAULT_INPUT "/dev/input/by-path/platform-gamepup-buttons-event"
 #define DEFAULT_FB "/dev/fb0"
 #define DEFAULT_BUZZER "/dev/input/by-path/platform-gamepup-buzzer-event"
 #define SYSTEM_DIR "/opt/gamepup/system"
@@ -73,12 +73,19 @@ static void *core_handle;
 static int fb_fd = -1;
 static int input_fd = -1;
 static int buzzer_fd = -1;
+/* Logical landscape canvas used for scaling/bezels (always 32-bit XRGB). */
 static uint8_t *fb_frame;
 static size_t fb_frame_size;
-static unsigned fb_width;
-static unsigned fb_height;
-static unsigned fb_stride;
-static unsigned fb_bpp;
+static unsigned fb_width = 320;
+static unsigned fb_height = 240;
+static unsigned fb_stride = 320 * 4;
+/* Physical /dev/fb0 geometry (may be 16 bpp and/or portrait). */
+static uint8_t *fb_present;
+static size_t fb_present_size;
+static unsigned hw_width;
+static unsigned hw_height;
+static unsigned hw_stride;
+static unsigned hw_bpp;
 static enum retro_pixel_format pixel_format = RETRO_PIXEL_FORMAT_0RGB1555;
 static EGLDisplay hw_display = EGL_NO_DISPLAY;
 static EGLSurface hw_surface = EGL_NO_SURFACE;
@@ -116,8 +123,12 @@ enum bezel_style {
 	BEZEL_SYSTEM,
 };
 
+#define BEZEL_WIDTH 320
+#define BEZEL_BAND_HEIGHT 20
+#define BEZEL_HEIGHT (BEZEL_BAND_HEIGHT * 2)
+
 static enum bezel_style bezel_style = BEZEL_GAMEPUP;
-static uint32_t system_bezel[128 * 40];
+static uint32_t system_bezel[BEZEL_WIDTH * BEZEL_HEIGHT];
 static bool system_bezel_loaded;
 
 struct bezel_glyph {
@@ -593,13 +604,61 @@ static uint64_t source_coordinate(unsigned destination_index,
 	return coordinate > 32768 ? coordinate - 32768 : 0;
 }
 
+static uint32_t xrgb_to_rgb565(uint32_t color)
+{
+	unsigned red = (color >> 16) & 0xff;
+	unsigned green = (color >> 8) & 0xff;
+	unsigned blue = color & 0xff;
+
+	return (uint32_t)(((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3));
+}
+
 static void write_framebuffer(void)
 {
 	size_t written = 0;
+	const uint32_t *src = (const uint32_t *)fb_frame;
 
-	while (written < fb_frame_size) {
-		ssize_t result = pwrite(fb_fd, fb_frame + written,
-					fb_frame_size - written, (off_t)written);
+	if (hw_width == fb_width && hw_height == fb_height && hw_bpp == 32) {
+		for (unsigned y = 0; y < fb_height; ++y)
+			memcpy(fb_present + y * hw_stride,
+			       fb_frame + y * fb_stride,
+			       (size_t)fb_width * 4);
+	} else if (hw_width == fb_width && hw_height == fb_height && hw_bpp == 16) {
+		for (unsigned y = 0; y < fb_height; ++y) {
+			uint16_t *dst = (uint16_t *)(fb_present + y * hw_stride);
+
+			for (unsigned x = 0; x < fb_width; ++x)
+				dst[x] = (uint16_t)xrgb_to_rgb565(src[y * fb_width + x]);
+		}
+	} else if (hw_width == fb_height && hw_height == fb_width) {
+		/* Portrait panel: rotate landscape canvas 90° CCW. */
+		for (unsigned y = 0; y < fb_height; ++y) {
+			for (unsigned x = 0; x < fb_width; ++x) {
+				unsigned dst_x = y;
+				unsigned dst_y = fb_width - 1 - x;
+				uint32_t color = src[y * fb_width + x];
+
+				if (hw_bpp == 16) {
+					uint16_t *row = (uint16_t *)(fb_present +
+								     dst_y * hw_stride);
+					row[dst_x] = (uint16_t)xrgb_to_rgb565(color);
+				} else {
+					uint32_t *row = (uint32_t *)(fb_present +
+								     dst_y * hw_stride);
+					row[dst_x] = color;
+				}
+			}
+		}
+	} else {
+		fprintf(stderr, "Unsupported framebuffer mapping %ux%u/%ubpp\n",
+			hw_width, hw_height, hw_bpp);
+		keep_running = 0;
+		return;
+	}
+
+	while (written < fb_present_size) {
+		ssize_t result = pwrite(fb_fd, fb_present + written,
+					fb_present_size - written, (off_t)written);
 		if (result < 0 && errno == EINTR)
 			continue;
 		if (result <= 0) {
@@ -715,12 +774,19 @@ static void draw_arcade_bezel(unsigned top, unsigned game_height)
 				((x / 8 + y / 4) & 1) ? tile_b : tile_a);
 	framebuffer_fill_rect(0, (int)top - 1, (int)fb_width, 1, cyan);
 	framebuffer_fill_rect(0, bottom_start, (int)fb_width, 1, magenta);
-	framebuffer_fill_rect(34, top_text_y - 1, 59, 9, background);
-	framebuffer_fill_rect(36, bottom_text_y - 1, 56, 9, background);
-	draw_bezel_text(((int)fb_width - bezel_text_width("ARCADE")) / 2,
-			 top_text_y, "ARCADE", magenta);
-	draw_bezel_text(((int)fb_width - bezel_text_width(system)) / 2,
-			 bottom_text_y, system, cyan);
+	{
+		int arcade_w = bezel_text_width("ARCADE");
+		int system_w = bezel_text_width(system);
+		int arcade_x = ((int)fb_width - arcade_w) / 2;
+		int system_x = ((int)fb_width - system_w) / 2;
+
+		framebuffer_fill_rect(arcade_x - 2, top_text_y - 1,
+				      arcade_w + 4, 9, background);
+		framebuffer_fill_rect(system_x - 2, bottom_text_y - 1,
+				      system_w + 4, 9, background);
+		draw_bezel_text(arcade_x, top_text_y, "ARCADE", magenta);
+		draw_bezel_text(system_x, bottom_text_y, system, cyan);
+	}
 }
 
 static bool load_system_bezel(void)
@@ -731,7 +797,7 @@ static bool load_system_bezel(void)
 			       strcmp(mode, "DOOM") == 0 ? "doom-system.rgb" :
 			       "gbc-system.rgb";
 	char path[256];
-	uint8_t pixels[128 * 40 * 3];
+	uint8_t pixels[BEZEL_WIDTH * BEZEL_HEIGHT * 3];
 	size_t offset = 0;
 	int fd;
 
@@ -751,7 +817,7 @@ static bool load_system_bezel(void)
 	close(fd);
 	if (offset != sizeof(pixels))
 		return false;
-	for (size_t pixel = 0; pixel < 128 * 40; ++pixel)
+	for (size_t pixel = 0; pixel < BEZEL_WIDTH * BEZEL_HEIGHT; ++pixel)
 		system_bezel[pixel] = ((uint32_t)pixels[pixel * 3] << 16) |
 				     ((uint32_t)pixels[pixel * 3 + 1] << 8) |
 				     pixels[pixel * 3 + 2];
@@ -769,19 +835,22 @@ static void draw_system_bezel(unsigned top, unsigned game_height)
 
 	framebuffer_fill_rect(0, 0, (int)fb_width, (int)fb_height, 0x00000000);
 	for (int y = 0; y < (int)top; ++y) {
-		unsigned source_y = (unsigned)y * 20 / top;
+		unsigned source_y = (unsigned)y * BEZEL_BAND_HEIGHT / top;
 		uint32_t *destination = (uint32_t *)(fb_frame + y * fb_stride);
 
 		for (unsigned x = 0; x < fb_width; ++x)
-			destination[x] = system_bezel[source_y * 128 + x * 128 / fb_width];
+			destination[x] = system_bezel[source_y * BEZEL_WIDTH +
+						       x * BEZEL_WIDTH / fb_width];
 	}
 	for (int y = 0; y < bottom_height; ++y) {
-		unsigned source_y = 20 + (unsigned)y * 20 / (unsigned)bottom_height;
+		unsigned source_y = BEZEL_BAND_HEIGHT +
+			(unsigned)y * BEZEL_BAND_HEIGHT / (unsigned)bottom_height;
 		uint32_t *destination = (uint32_t *)(fb_frame +
 						       (bottom_start + y) * fb_stride);
 
 		for (unsigned x = 0; x < fb_width; ++x)
-			destination[x] = system_bezel[source_y * 128 + x * 128 / fb_width];
+			destination[x] = system_bezel[source_y * BEZEL_WIDTH +
+						       x * BEZEL_WIDTH / fb_width];
 	}
 	framebuffer_fill_rect(0, (int)top - 1, (int)fb_width, 1, accent);
 	framebuffer_fill_rect(0, bottom_start, (int)fb_width, 1, accent);
@@ -1326,26 +1395,43 @@ static void open_devices(const char *framebuffer_path, const char *input_path)
 		perror(framebuffer_path);
 		exit(EXIT_FAILURE);
 	}
-	fb_width = variable.xres;
-	fb_height = variable.yres;
-	fb_bpp = variable.bits_per_pixel;
-	fb_stride = fixed.line_length;
-	if (fb_bpp != 32) {
-		fprintf(stderr, "Expected a 32-bit framebuffer, got %u bpp\n", fb_bpp);
+	hw_width = variable.xres;
+	hw_height = variable.yres;
+	hw_bpp = variable.bits_per_pixel;
+	hw_stride = fixed.line_length;
+	if (hw_bpp != 16 && hw_bpp != 32) {
+		fprintf(stderr, "Expected a 16- or 32-bit framebuffer, got %u bpp\n",
+			hw_bpp);
 		exit(EXIT_FAILURE);
 	}
+	if (!((hw_width == 320 && hw_height == 240) ||
+	      (hw_width == 240 && hw_height == 320))) {
+		fprintf(stderr,
+			"Unsupported framebuffer %ux%u (need 320x240 or 240x320)\n",
+			hw_width, hw_height);
+		exit(EXIT_FAILURE);
+	}
+	fb_width = 320;
+	fb_height = 240;
+	fb_stride = fb_width * 4;
 	fb_frame_size = (size_t)fb_stride * fb_height;
 	fb_frame = calloc(1, fb_frame_size);
-	if (!fb_frame) {
+	fb_present_size = (size_t)hw_stride * hw_height;
+	fb_present = calloc(1, fb_present_size);
+	if (!fb_frame || !fb_present) {
 		perror("calloc framebuffer");
 		exit(EXIT_FAILURE);
 	}
+	fprintf(stderr, "GamePup framebuffer view 320x240 -> hw %ux%u stride=%u bpp=%u\n",
+		hw_width, hw_height, hw_stride, hw_bpp);
 
 	input_fd = open(input_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (input_fd < 0) {
 		perror(input_path);
 		exit(EXIT_FAILURE);
 	}
+	if (ioctl(input_fd, EVIOCGRAB, 1) < 0)
+		perror("EVIOCGRAB buttons");
 
 	audio_muted = access(MUTE_FILE, F_OK) == 0;
 	bezel_style = read_bezel_style();
@@ -1487,6 +1573,7 @@ int main(int argc, char **argv)
 		close(buzzer_fd);
 	close(fb_fd);
 	free(fb_frame);
+	free(fb_present);
 	free(rom_data);
 	clear_core_variables();
 	return EXIT_SUCCESS;

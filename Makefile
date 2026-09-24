@@ -3,7 +3,7 @@ KERNEL_VERSION ?= $(shell uname -r)
 KERNEL_BUILD ?= /lib/modules/$(KERNEL_VERSION)/build
 
 obj-m += drm_mipi_dbi.o
-obj-m += st7735r.o
+obj-m += ili9341.o
 
 .PHONY: modules clean
 

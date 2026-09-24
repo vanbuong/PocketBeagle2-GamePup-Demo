@@ -36,21 +36,21 @@ esac
 echo "[1/4] Building the pinned NES and Game Boy libretro cores..."
 "$SCRIPT_DIR/emulator/install-cores.sh"
 
-echo "[2/4] Installing the GamePup cape support and application..."
+if [ "$INSTALL_GPU" = 1 ]; then
+	echo "[2/4] Installing the TI PowerVR stack (before GLES-linked apps)..."
+	"$SCRIPT_DIR/emulator/install-gpu.sh"
+else
+	echo "[2/4] Skipping the TI PowerVR stack (GAMEPUP_INSTALL_GPU=$INSTALL_GPU)."
+fi
+
+echo "[3/4] Installing the GamePup cape support and application..."
 "$SCRIPT_DIR/install.sh"
 
 if [ "$INSTALL_DOOM" = 1 ]; then
-	echo "[3/4] Installing PrBoom and the separately licensed Doom shareware data..."
+	echo "[4/4] Installing PrBoom and the separately licensed Doom shareware data..."
 	"$SCRIPT_DIR/emulator/install-doom.sh"
 else
-	echo "[3/4] Skipping Doom (GAMEPUP_INSTALL_DOOM=$INSTALL_DOOM)."
-fi
-
-if [ "$INSTALL_GPU" = 1 ]; then
-	echo "[4/4] Installing the TI PowerVR stack and GPU demonstrations..."
-	"$SCRIPT_DIR/emulator/install-gpu.sh"
-else
-	echo "[4/4] Skipping the TI PowerVR stack (GAMEPUP_INSTALL_GPU=$INSTALL_GPU)."
+	echo "[4/4] Skipping Doom (GAMEPUP_INSTALL_DOOM=$INSTALL_DOOM)."
 fi
 
 echo

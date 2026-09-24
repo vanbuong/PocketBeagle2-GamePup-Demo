@@ -1,2 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0-only
 beagle ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-rom-import
+beagle ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-fbcon
+beagle ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-backlight-permissions

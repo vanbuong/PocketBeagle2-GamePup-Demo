@@ -9,22 +9,126 @@ from pathlib import Path
 import select
 import signal
 import struct
+import subprocess
 import sys
 import time
 
 
-WIDTH = 128
-HEIGHT = 160
+WIDTH = 320
+HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
 LEFT_LED = Path("/sys/class/leds/gamepup:left-eye/brightness")
 RIGHT_LED = Path("/sys/class/leds/gamepup:right-eye/brightness")
-BACKLIGHT = Path("/sys/class/backlight/backlight-gamepup/brightness")
+BACKLIGHT_PERMISSIONS = "/usr/local/libexec/gamepup-backlight-permissions"
+BACKLIGHT_CANDIDATES = (
+    Path("/sys/class/backlight/backlight-gamepup/brightness"),
+    Path("/sys/class/backlight/lcd-backlight/brightness"),
+)
 EVENT = struct.Struct("@llHHi")
 EV_KEY = 1
 EV_SND = 0x12
 SND_TONE = 2
+EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
+
+_fb_info = None
+_backlight_path = None
+
+
+def backlight_path():
+    global _backlight_path
+    if _backlight_path is not None:
+        return _backlight_path if _backlight_path.parts else None
+    for candidate in BACKLIGHT_CANDIDATES:
+        if candidate.exists():
+            _backlight_path = candidate
+            return candidate
+    root = Path("/sys/class/backlight")
+    if root.is_dir():
+        for directory in sorted(root.iterdir()):
+            candidate = directory / "brightness"
+            if candidate.exists():
+                _backlight_path = candidate
+                return candidate
+    _backlight_path = Path()
+    return None
+
+
+def grant_backlight_access():
+    for command in (
+        ["sudo", "-n", BACKLIGHT_PERMISSIONS, "grant"],
+        [BACKLIGHT_PERMISSIONS, "grant"],
+    ):
+        try:
+            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            continue
+
+
+def read_fb_info(framebuffer):
+    global _fb_info
+    if _fb_info is not None:
+        return _fb_info
+    var = array("B", [0]) * 160
+    fix = array("B", [0]) * 128
+    fcntl.ioctl(framebuffer, FBIOGET_VSCREENINFO, var, True)
+    fcntl.ioctl(framebuffer, FBIOGET_FSCREENINFO, fix, True)
+    xres = int.from_bytes(var[0:4], "little")
+    yres = int.from_bytes(var[4:8], "little")
+    bpp = int.from_bytes(var[24:28], "little")
+    try:
+        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+    except (OSError, ValueError):
+        stride = xres * (bpp // 8)
+    if bpp not in (16, 32):
+        raise OSError(f"Expected 16- or 32-bit framebuffer, got {bpp} bpp")
+    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+        raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
+    print(f"GamePup framebuffer {xres}x{yres} stride={stride} bpp={bpp}", file=sys.stderr)
+    return _fb_info
+
+
+def present_canvas(framebuffer, canvas):
+    info = read_fb_info(framebuffer)
+    stride = info["stride"]
+    height = info["height"]
+    width = info["width"]
+    bpp = info["bpp"]
+    frame = bytearray(stride * height)
+
+    def put_pixel(dst_x, dst_y, color):
+        if bpp == 16:
+            red = (color >> 16) & 0xff
+            green = (color >> 8) & 0xff
+            blue = color & 0xff
+            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+            offset = dst_y * stride + dst_x * 2
+            frame[offset:offset + 2] = int(value).to_bytes(2, "little")
+        else:
+            offset = dst_y * stride + dst_x * 4
+            frame[offset:offset + 4] = int(color).to_bytes(4, "little")
+
+    if width == WIDTH and height == HEIGHT:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(x, y, int(src[y * WIDTH + x]))
+    else:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(y, WIDTH - 1 - x, int(src[y * WIDTH + x]))
+    view = memoryview(frame)
+    written = 0
+    while written < len(frame):
+        written += os.pwrite(framebuffer, view[written:], written)
+
 
 KEY_ESC = 1
 KEY_1 = 2
@@ -95,16 +199,16 @@ FONT = {
 }
 
 BUTTONS = {
-    KEY_UP: ("UP", 23, 42, 20, 12),
-    KEY_LEFT: ("LT", 4, 56, 20, 12),
-    KEY_RIGHT: ("RT", 42, 56, 20, 12),
-    KEY_DOWN: ("DN", 23, 70, 20, 12),
-    KEY_ESC: ("X", 89, 42, 16, 12),
-    KEY_P: ("Y", 72, 56, 16, 12),
-    KEY_TAB: ("A", 106, 56, 16, 12),
-    KEY_ENTER: ("B", 89, 70, 16, 12),
-    KEY_5: ("SEL", 24, 91, 32, 12),
-    KEY_1: ("START", 69, 91, 48, 12),
+    KEY_UP: ("UP", 58, 52, 40, 18),
+    KEY_LEFT: ("LT", 18, 76, 40, 18),
+    KEY_RIGHT: ("RT", 98, 76, 40, 18),
+    KEY_DOWN: ("DN", 58, 100, 40, 18),
+    KEY_ESC: ("X", 222, 52, 36, 18),
+    KEY_P: ("Y", 182, 76, 36, 18),
+    KEY_TAB: ("A", 262, 76, 36, 18),
+    KEY_ENTER: ("B", 222, 100, 36, 18),
+    KEY_5: ("SEL", 60, 138, 64, 18),
+    KEY_1: ("START", 180, 138, 80, 18),
 }
 
 running = True
@@ -155,16 +259,23 @@ def write_tone(buzzer_fd: int, frequency: int):
 
 
 def brightness_value() -> int:
+    path = backlight_path()
+    if path is None:
+        return 11
     try:
-        return int(BACKLIGHT.read_text(encoding="ascii").strip())
+        return int(path.read_text(encoding="ascii").strip())
     except (OSError, ValueError):
         return 11
 
 
 def adjust_brightness(direction: int) -> int:
     level = max(0, min(11, brightness_value() + direction))
+    path = backlight_path()
+    if path is None:
+        print("No backlight sysfs node found.", file=sys.stderr)
+        return level
     try:
-        BACKLIGHT.write_text(f"{level}\n", encoding="ascii")
+        path.write_text(f"{level}\n", encoding="ascii")
     except OSError as error:
         print(f"Unable to control backlight: {error}", file=sys.stderr)
     return level
@@ -175,7 +286,7 @@ def draw_color_test(framebuffer: int, pattern: int):
     if pattern <= len(colors):
         canvas = array("I", [colors[pattern - 1]]) * (WIDTH * HEIGHT)
         label_color = BLACK if colors[pattern - 1] == WHITE else WHITE
-        centered_text(canvas, 145, "START NEXT", label_color)
+        centered_text(canvas, 220, "START NEXT", label_color)
     else:
         canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
         bars = (WHITE, YELLOW, CYAN, GREEN, MAGENTA, RED, BLUE, BLACK)
@@ -184,9 +295,9 @@ def draw_color_test(framebuffer: int, pattern: int):
             fill_rect(canvas, index * bar_width, 0,
                       WIDTH if index == len(bars) - 1 else bar_width,
                       HEIGHT, color)
-        fill_rect(canvas, 22, 143, 84, 11, BLACK)
-        centered_text(canvas, 145, "START UI", WHITE)
-    os.pwrite(framebuffer, canvas.tobytes(), 0)
+        fill_rect(canvas, (WIDTH - 96) // 2, 216, 96, 14, BLACK)
+        centered_text(canvas, 220, "START UI", WHITE)
+    present_canvas(framebuffer, canvas)
 
 
 def draw_ui(framebuffer: int, pressed: set[int], tested: set[int],
@@ -208,14 +319,14 @@ def draw_ui(framebuffer: int, pressed: set[int], tested: set[int],
         draw_text(canvas, x + (width - text_width) // 2, y + 2,
                   label, text_color)
 
-    draw_text(canvas, 3, 108, "X LEFT EYE", GRAY)
-    draw_text(canvas, 67, 108, "Y RIGHT", GRAY)
-    draw_text(canvas, 3, 119, "A BOTH EYES", GRAY)
-    draw_text(canvas, 73, 119, "B TONE", GRAY)
-    draw_text(canvas, 3, 130, f"UP/DN {frequency}HZ", WHITE)
-    draw_text(canvas, 3, 141, f"LT/RT LIGHT {brightness}/11", WHITE)
-    draw_text(canvas, 2, 152, "ST COLOR  SEL+ST EXIT", GREEN)
-    os.pwrite(framebuffer, canvas.tobytes(), 0)
+    draw_text(canvas, 16, 170, "X LEFT EYE", GRAY)
+    draw_text(canvas, 160, 170, "Y RIGHT EYE", GRAY)
+    draw_text(canvas, 16, 184, "A BOTH EYES", GRAY)
+    draw_text(canvas, 160, 184, "B TONE", GRAY)
+    draw_text(canvas, 16, 198, f"UP/DN {frequency}HZ", WHITE)
+    draw_text(canvas, 160, 198, f"LT/RT LIGHT {brightness}/11", WHITE)
+    centered_text(canvas, 220, "ST COLOR  SEL+ST EXIT", GREEN)
+    present_canvas(framebuffer, canvas)
 
 
 def outputs_off(buzzer_fd: int):
@@ -244,6 +355,7 @@ def keys_down(input_fd: int) -> set[int]:
 
 
 def run_test(self_test_only: bool = False) -> int:
+    grant_backlight_access()
     framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
     buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     input_fd = -1
@@ -255,6 +367,10 @@ def run_test(self_test_only: bool = False) -> int:
             return 0
 
         input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            fcntl.ioctl(input_fd, EVIOCGRAB, 1)
+        except OSError as error:
+            print(f"Unable to grab buttons: {error}", file=sys.stderr)
         pressed: set[int] = set()
         tested: set[int] = set()
         frequency = 880
@@ -312,7 +428,9 @@ def run_test(self_test_only: bool = False) -> int:
     finally:
         outputs_off(buzzer_fd)
         try:
-            BACKLIGHT.write_text(f"{original_brightness}\n", encoding="ascii")
+            path = backlight_path()
+            if path is not None:
+                path.write_text(f"{original_brightness}\n", encoding="ascii")
         except OSError:
             pass
         if input_fd >= 0:

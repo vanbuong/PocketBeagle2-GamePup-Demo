@@ -3,7 +3,7 @@
 An open-source PocketBeagle 2 port and tiny framebuffer game launcher for the
 GamePup A4 cape. It combines native cape support, a controller-first game menu,
 libretro emulation, PowerVR demonstrations, a USB ROM inbox, hardware tests,
-and an optional 96x96 OLED dashboard.
+and an optional 128x64 SH1106 OLED dashboard with EC11 encoder.
 
 > **Development note:** this project was created by
 > [@Grippy98](https://github.com/Grippy98) with AI-assisted implementation and
@@ -13,12 +13,12 @@ and an optional 96x96 OLED dashboard.
 This overlay enables the GamePup A4 cape on the PocketBeagle 2:
 
 - the ten buttons as a Linux `gpio-keys` keyboard;
-- the Adafruit 1.8-inch ST7735R display as DRM/fbdev;
+- the ILI9341 display as DRM/fbdev (landscape 320x240);
 - PWM display backlight;
 - both eye LEDs;
 - PWM buzzer;
 - the Click socket's SPI device (`spidev`);
-- OLED C Click control pins and a 96x96 system-status dashboard;
+- SH1106 1.3" I2C OLED status dashboard and EC11 encoder on the Click socket;
 - a safe FAT32 USB ROM inbox alongside USB networking and serial;
 - the cape EEPROM (`at24` on I2C2).
 
@@ -27,8 +27,10 @@ device tree.
 
 ## Screenshots
 
-The images below are native captures from the 128x160 GamePup LCD. Click one
-to view it at its original pixel resolution.
+The images below are native captures from the original 128x160 GamePup LCD.
+They remain as historical UI references; the current tree targets an ILI9341
+landscape **320x240** framebuffer. Click one to view it at its original pixel
+resolution.
 
 <table>
   <tr>
@@ -56,22 +58,25 @@ commercial game imagery is included. Capture provenance is documented in
 
 ## Displays and render resolutions
 
-The main ST7735R LCD is a portrait **128x160** framebuffer using 32-bit XRGB.
-Menus, the hardware tester, and GPU benchmarks render at the native 128x160
-resolution. Games keep their intended aspect ratio and use the remaining rows
+The main ILI9341 LCD is a landscape **320x240** framebuffer using 32-bit XRGB
+(`rotation = <90>` in the overlay; use `270` if your panel is upside-down).
+Menus, the hardware tester, and GPU benchmarks render at the native 320x240
+resolution. Games keep their intended aspect ratio and use the remaining space
 for black bands or the optional bezel.
 
-| Content | Source/render resolution | LCD game area | Letterbox rows |
-|---|---:|---:|---:|
-| Menu, tools, tests | 128x160 | 128x160 | none |
-| Game Boy / Game Boy Color | 160x144 | 128x115 | 22 top, 23 bottom |
-| NES | 256x240 | 128x120 | 20 top, 20 bottom |
-| Nintendo 64 | 320x240 PowerVR pbuffer | 128x96 | 32 top, 32 bottom |
-| Doom | normally 320x200 from PrBoom | 128x96, corrected to 4:3 | 32 top, 32 bottom |
-| PowerVR benchmarks | 128x160 OpenGL ES pbuffer | 128x160 | none |
+| Content | Source/render resolution | LCD game area | Letterbox |
+|---|---:|---:|---|
+| Menu, tools, tests | 320x240 | 320x240 | none |
+| Game Boy / Game Boy Color | 160x144 | 266x240 | ~27 left/right |
+| NES | 256x240 | 256x240 | 32 left/right |
+| Nintendo 64 | 320x240 PowerVR pbuffer | 320x240 | none |
+| Doom | normally 320x200 from PrBoom | 320x240, corrected to 4:3 | none (fills height) |
+| PowerVR benchmarks | 320x240 OpenGL ES pbuffer | 320x240 | none |
 
-The optional OLED C Click is a separate **96x96 RGB565** display. Both its
-status dashboard and GIF mode render at 96x96; it does not mirror the main LCD.
+The optional second screen is a **128x64 SH1106** mono OLED on I2C2. Both its
+status dashboard and GIF mode render at 128x64; it does not mirror the main LCD.
+The EC11 encoder on the Click control pins adjusts brightness and toggles GIF
+mode.
 
 ## One-command install
 
@@ -108,10 +113,10 @@ because compiling it directly on the board is slow and memory-intensive.
 
 ## Manual installation
 
-The installed Armbian vendor kernel has the DRM ST7735R driver disabled, so
-`install.sh` builds the two required matching upstream Linux modules against
-the installed Armbian headers, installs the overlay, and adds it to
-`/boot/extlinux/extlinux.conf`.
+On BeagleBoard PocketBeagle 2 Debian 13.7 IoT (`v6.18.x-k3`), the stock kernel
+leaves the DRM ILI9341 driver disabled, so `install.sh` builds the two required
+matching upstream Linux modules against the installed headers, installs the
+overlay, and adds it to `/boot/extlinux/extlinux.conf`.
 
 ```sh
 sudo ./emulator/install-cores.sh
@@ -122,12 +127,52 @@ sudo reboot
 The installer saves the original boot configuration as
 `/boot/extlinux/extlinux.conf.before-gamepup-a4`.
 
+## Cross-compile CI (host → aarch64)
+
+GitHub Actions cross-compiles the overlay, userspace apps, libretro cores, and
+ILI9341 DRM modules for **PocketBeagle 2 Debian 13.7 2026-09-20 IoT
+(v6.18.x-k3)**. Target pins live in [`ci/target.env`](ci/target.env).
+
+Locally on an amd64 Linux host:
+
+```sh
+sudo apt-get install -y gcc-14-aarch64-linux-gnu g++-14-aarch64-linux-gnu \
+  device-tree-compiler qemu-user-static git curl
+# also install Ubuntu ports arm64 -dev packages for EGL/GLES/gif (see workflow)
+./scripts/cross-build.sh
+```
+
+On the PocketBeagle 2, install the userspace/CI artifact tree (bins, cores,
+bezels; **skips** modules and dtbo):
+
+```sh
+sudo ./scripts/install-artifacts.sh ./dist
+```
+
+For a full artifact install including modules and overlay:
+
+```sh
+sudo ./scripts/install-dist.sh ./dist
+```
+
+Both installers also create `/opt/gamepup/games/{nes,gbc,n64,doom}` and install
+Doom Shareware from the `doom-wad-shareware` package to
+`/opt/gamepup/games/doom/Doom Shareware.wad` (same as `emulator/install-doom.sh`).
+
+Artifacts land in `dist/` (`bin/`, `libretro/` including Nestopia, Gambatte,
+PrBoom, and Mupen64Plus-Next, `modules/`, `dtbo/`). Set `SKIP_N64=1` to omit
+the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
+2)** workflow run.
+
 ## Devices after reboot
 
 - display: `/dev/dri/card*` and usually `/dev/fb0`;
 - buttons: `/dev/input/by-path/*gamepup*` or the event device named
   `gamepup-buttons`/`gpio-keys`;
-- Click SPI: `/dev/spidev0.0`;
+- Click SPI: `/dev/spidev0.0` (available for other Click boards);
+- SH1106 OLED: `/dev/i2c-2` address `0x3c`;
+- EC11 encoder: input devices `gamepup-encoder` (dial) and
+  `gamepup-encoder-button` (push);
 - LEDs: `/sys/class/leds/gamepup:left-eye` and
   `/sys/class/leds/gamepup:right-eye`;
 - buzzer: an input device named `gamepup-buzzer` or `pwm-beeper`;
@@ -163,13 +208,13 @@ can remain on disk harmlessly when they are no longer referenced.
 
 Because these modules are built for one exact kernel release, rerun the
 installer after a kernel upgrade if the new Armbian kernel still leaves the
-ST7735R driver disabled.
+ILI9341 driver disabled.
 
 ## Game Boy Color
 
 The `emulator/` directory contains a minimal libretro frontend tailored to
-the 128x160 GamePup framebuffer. Game Boy video is a particularly good match:
-its native 160x144 image scales to 128x115 and is centered vertically. ROMs are
+the 320x240 GamePup framebuffer. Game Boy video scales to fill the panel height
+(about 266x240) and is centered horizontally. ROMs are
 user-supplied and kept outside this repository.
 
 Controls:
@@ -191,8 +236,9 @@ effects, but cannot reproduce the original multi-channel audio or volume.
 ## NES library
 
 User-owned NES ROMs are stored separately under `/opt/gamepup/games/nes`.
-The menu launches them through the Nestopia libretro core. NES video is reduced
-from 256x240 to 128x120 with bilinear sampling and centered vertically.
+The menu launches them through the Nestopia libretro core. NES video scales
+from 256x240 to 256x240 on the landscape panel (with 32-pixel side pillars)
+using bilinear sampling.
 
 List installed games or preselect one by a unique portion of the title. After
 preselecting over SSH, press A or Start on the GamePup to launch it:
@@ -211,8 +257,8 @@ right-pad down is B, and the labeled Select and Start buttons map directly.
 The `N64 GAMES` folder launches user-owned `.z64`, `.n64`, and `.v64` images
 through a pinned ARM64 build of Mupen64Plus-Next. GLideN64 renders into a
 320x240 OpenGL ES 3 pbuffer on the AM625's PowerVR AXE-1-16M GPU; the frontend
-reads that GPU result back, scales it to the LCD's 128x96 game area, and adds
-the selected top and bottom bezel. It explicitly rejects LLVMpipe and other
+reads that GPU result back and presents it 1:1 on the 320x240 LCD, with
+optional side/top bezels when letterboxing remains. It explicitly rejects LLVMpipe and other
 software renderers.
 
 The PocketBeagle 2 has little memory available to the GPU's contiguous-memory
@@ -296,10 +342,17 @@ The home screen's `BENCHMARKS` folder contains four hardware-only OpenGL ES
 tests for the AM625's PowerVR AXE-1-16M GPU: `GPU PLASMA` stresses shader ALU,
 `GPU FILL RATE` draws 48 blended full-screen layers per frame, and
 `GPU TRIANGLES` submits 2,048 animated triangles per frame. `GL GEARS`
-renders three lit, depth-tested 3D cogwheels. Each test renders at 128x160 with
+renders three lit, depth-tested 3D cogwheels. Each test renders at 320x240 with
 TI's driver, rejects LLVMpipe or other software renderers, copies the result to
 the GamePup LCD, and shows its measured frame rate. Hold Start+Select to return
 to the benchmark folder.
+
+On PocketBeagle 2 Debian IoT, do **not** install Mesa `libegl-dev` /
+`libgles-dev` alongside the TI stack: those packages pull `libegl1`, which
+conflicts with TI's `libegl-mesa0-pvr`. GamePup vendors Khronos EGL/GLES
+headers under `emulator/khronos/` and links against TI's runtime libraries from
+`ti-img-rogue-umlibs-am62`. `install-gpu.sh` removes conflicting Mesa packages
+before installing the TI packages.
 
 The GPU stack follows Armbian's
 [`beagleplay.conf`](https://github.com/armbian/build/blob/main/config/boards/beagleplay.conf):
@@ -326,7 +379,8 @@ screen. While playing, hold Start+Select for about one second to save, exit, and
 return to the current game folder (or directly to the home screen from Doom).
 
 Settings provides persistent toggles for all sound and menu beeps, an eight-step
-hardware-PWM backlight slider adjusted with D-pad Left/Right, plus an
+hardware-PWM backlight slider adjusted with D-pad Left/Right (sysfs path
+`backlight-gamepup` or `lcd-backlight`), plus an
 `EXIT TO TTY` action that stops the launcher and restores the Linux framebuffer
 console. Muted games do not open the PWM buzzer device.
 
@@ -353,9 +407,12 @@ launching a game has a confirmation sound, and returning from a game has a
 descending back sound. These interface sounds also obey the mute setting.
 
 The service temporarily unbinds the Linux framebuffer console while it is
-active. This prevents tty1/getty cursor and keyboard updates from repainting
-over the menu or game. Stopping the service reattaches the framebuffer console;
-SSH and the serial console are unaffected throughout.
+active and exclusively grabs the GamePup button input device. This prevents
+tty1/getty cursor and keyboard updates (for example raw `^[[A` / `^[[B` arrow
+escape sequences) from painting over the menu or game. Stopping the service
+reattaches the framebuffer console; SSH and the serial console are unaffected
+throughout. If you launch the menu by hand, run
+`sudo /usr/local/libexec/gamepup-fbcon detach` first.
 
 ## Hardware tester
 
@@ -379,22 +436,29 @@ tone. The tester intentionally writes straight to the PWM buzzer and therefore
 works even when game/menu audio is muted. It switches the LEDs and buzzer off
 and restores the original backlight level when it exits.
 
-## OLED C status display
+## SH1106 OLED status display
 
-An OLED C Click in the GamePup mikroBUS socket is driven independently from the
-main LCD. The `gamepup-oled-status` service is adjustable from 5–30 Hz and shows
-the live
-AM625 clock frequency, CPU and RAM percentages, live GPU utilization, and the
-measured emulator or benchmark frame rate. The bottom line identifies the
-current activity as `MENU`, `NES`, `GBC`, `N64`, `DOOM`, or `GPU`. At the menu,
-FPS is zero because the menu redraws only in response to input rather than
-running a frame loop.
+A 1.3" 128x64 SH1106 OLED on the GamePup mikroBUS I2C lines (`/dev/i2c-2` @
+`0x3c`) is driven independently from the main LCD. The `gamepup-oled-status`
+service is adjustable from 5–30 Hz and shows the live AM625 clock frequency,
+CPU and RAM percentages, live GPU utilization, and the measured emulator or
+benchmark frame rate. The bottom line identifies the current activity as
+`MENU`, `NES`, `GBC`, `N64`, `DOOM`, or `GPU`. At the menu, FPS is zero because
+the menu redraws only in response to input rather than running a frame loop.
 
-The implementation targets the 96x96 SSD1351 OLED C Click (board revisions 1.01
-and later) and uses the manufacturer's RGB565 initialization values at an
-18 MHz SPI clock. After its initial full frame, the service sends only changed
-rectangles to keep high refresh rates efficient. The service is enabled by
-`install.sh` and starts after the overlay is active on the next boot.
+An EC11 rotary encoder on the Click control pins (AN=A / INT=B / RST=switch)
+controls the second screen directly:
+
+| Control | Action |
+|---|---|
+| Rotate | Brightness 1–8 (writes `/opt/gamepup/saves/oled-brightness`) |
+| Click | Toggle status ↔ GIF mode |
+
+Wire the OLED to mikroBUS **SDA/SCL** (PocketBeagle 2 `I2C2` on P1.26/P1.28)
+and the encoder to **AN**, **INT**, and **RST**. Override the bus or address
+with `GAMEPUP_OLED_I2C` / `GAMEPUP_OLED_ADDR` if needed. After each frame the
+service refreshes only changed 8-pixel pages. The service is enabled by
+`install.sh` and starts after I2C2 is available on the next boot.
 
 ## License and redistribution
 

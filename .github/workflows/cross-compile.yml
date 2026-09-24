@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: Cross compile (PocketBeagle 2)
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: cross-compile-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-compile:
+    name: aarch64 for Debian 13.7 IoT (v6.18.x-k3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable Ubuntu arm64 multiarch
+        run: |
+          set -eux
+          sudo dpkg --add-architecture arm64
+          printf '%s\n' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main universe' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe' \
+            'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main universe' \
+            | sudo tee /etc/apt/sources.list.d/arm64-ports.list >/dev/null
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Architectures:/d' /etc/apt/sources.list.d/ubuntu.sources
+            sudo sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo apt-get update -qq
+
+      - name: Install cross toolchain and libraries
+        run: |
+          set -eux
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            curl \
+            device-tree-compiler \
+            file \
+            gcc-14-aarch64-linux-gnu \
+            g++-14-aarch64-linux-gnu \
+            git \
+            libegl1-mesa-dev:arm64 \
+            libgles2-mesa-dev:arm64 \
+            libgif-dev:arm64 \
+            pkg-config \
+            qemu-user-static \
+            xz-utils
+
+      - name: Cross-compile everything (including N64)
+        env:
+          BUILD_JOBS: "4"
+          BUILD_N64: "1"
+        run: |
+          set -eux
+          chmod +x scripts/cross-build.sh scripts/install-dist.sh \
+            scripts/install-artifacts.sh
+          ./scripts/cross-build.sh
+
+      - name: Verify aarch64 artifacts
+        run: |
+          set -eux
+          file dist/bin/gamepup-retro | grep -q 'ARM aarch64'
+          file dist/bin/gamepup-oled-status | grep -q 'ARM aarch64'
+          file dist/bin/gamepup-gpu-bench | grep -q 'ARM aarch64'
+          file dist/modules/ili9341.ko | grep -q 'ARM aarch64'
+          file dist/modules/drm_mipi_dbi.ko | grep -q 'ARM aarch64'
+          file dist/libretro/nestopia_libretro.so | grep -q 'ARM aarch64'
+          file dist/libretro/gambatte_libretro.so | grep -q 'ARM aarch64'
+          file dist/libretro/prboom_libretro.so | grep -q 'ARM aarch64'
+          file dist/libretro/mupen64plus_next_libretro.so | grep -q 'ARM aarch64'
+          test -f dist/dtbo/k3-am6232-pocketbeagle2-gamepup-a4.dtbo
+          test -f dist/modules/KERNEL_VERSION.txt
+          cat dist/MANIFEST.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamepup-pb2-debian-13.7-aarch64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

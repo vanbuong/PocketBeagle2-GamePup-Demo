@@ -15,11 +15,14 @@ import sys
 import time
 
 
-WIDTH = 128
-HEIGHT = 160
+WIDTH = 320
+HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
-INPUT = "/dev/input/event0"
+INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
+INPUT_FALLBACK = "/dev/input/event0"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
+FBCON = "/usr/local/libexec/gamepup-fbcon"
+BACKLIGHT_PERMISSIONS = "/usr/local/libexec/gamepup-backlight-permissions"
 FRONTEND = "/usr/local/bin/gamepup-retro"
 GPU_BENCHMARK = "/usr/local/bin/gamepup-gpu-bench"
 HARDWARE_TEST = "/usr/local/bin/gamepup-hardware-test"
@@ -49,7 +52,10 @@ OLED_GIF_MODE_FILE = Path("/opt/gamepup/saves/oled-gif-mode")
 OLED_GIF_SELECTION_FILE = Path("/opt/gamepup/saves/oled-gif-selection")
 OLED_GIF_ROOT = Path("/opt/gamepup/gifs")
 FPS_FILE = Path("/run/gamepup/fps")
-BACKLIGHT = Path("/sys/class/backlight/backlight-gamepup/brightness")
+BACKLIGHT_CANDIDATES = (
+    Path("/sys/class/backlight/backlight-gamepup/brightness"),
+    Path("/sys/class/backlight/lcd-backlight/brightness"),
+)
 BRIGHTNESS_LEVELS = tuple(range(4, 12))
 OLED_BRIGHTNESS_LEVELS = tuple(range(1, 9))
 OLED_REFRESH_LEVELS = (5, 10, 15, 20, 25, 30)
@@ -75,6 +81,9 @@ KEY_RIGHT = 106
 KEY_UP = 103
 KEY_DOWN = 108
 EVENT = struct.Struct("@llHHi")
+EVIOCGRAB = 0x40044590  # _IOW('E', 0x90, int)
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
 
 BLACK = 0x000000
 WHITE = 0xF4F4E8
@@ -84,6 +93,106 @@ YELLOW = 0xF4D35E
 BLUE = 0x174A70
 GRAY = 0x708078
 RED = 0xE85D5D
+
+_fb_info: dict | None = None
+_backlight_path: Path | None = None
+
+
+def backlight_path() -> Path | None:
+    global _backlight_path
+    if _backlight_path is not None:
+        return _backlight_path if _backlight_path.parts else None
+    for candidate in BACKLIGHT_CANDIDATES:
+        if candidate.exists():
+            _backlight_path = candidate
+            return candidate
+    root = Path("/sys/class/backlight")
+    if root.is_dir():
+        for directory in sorted(root.iterdir()):
+            candidate = directory / "brightness"
+            if candidate.exists():
+                _backlight_path = candidate
+                return candidate
+    _backlight_path = Path()
+    return None
+
+
+def grant_backlight_access() -> None:
+    for command in (
+        ["sudo", "-n", BACKLIGHT_PERMISSIONS, "grant"],
+        [BACKLIGHT_PERMISSIONS, "grant"],
+    ):
+        try:
+            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            continue
+
+
+def read_fb_info(framebuffer: int) -> dict:
+    global _fb_info
+    if _fb_info is not None:
+        return _fb_info
+    # struct fb_var_screeninfo: first two u32 are xres, yres; bits_per_pixel at offset 24
+    var = array("B", [0]) * 160
+    fix = array("B", [0]) * 128
+    fcntl.ioctl(framebuffer, FBIOGET_VSCREENINFO, var, True)
+    fcntl.ioctl(framebuffer, FBIOGET_FSCREENINFO, fix, True)
+    xres = int.from_bytes(var[0:4], "little")
+    yres = int.from_bytes(var[4:8], "little")
+    bpp = int.from_bytes(var[24:28], "little")
+    # line_length is at offset 48 in fb_fix_screeninfo on 64-bit (after id[16], smem_start)
+    # Portable approach: read sysfs when available.
+    stride = 0
+    try:
+        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+    except (OSError, ValueError):
+        stride = xres * (bpp // 8)
+    if bpp not in (16, 32):
+        raise OSError(f"Expected 16- or 32-bit framebuffer, got {bpp} bpp")
+    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+        raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
+    print(f"GamePup framebuffer {xres}x{yres} stride={stride} bpp={bpp}", file=sys.stderr)
+    return _fb_info
+
+
+def present_canvas(framebuffer, canvas):
+    info = read_fb_info(framebuffer)
+    stride = info["stride"]
+    height = info["height"]
+    width = info["width"]
+    bpp = info["bpp"]
+    frame = bytearray(stride * height)
+
+    def put_pixel(dst_x, dst_y, color):
+        if bpp == 16:
+            red = (color >> 16) & 0xff
+            green = (color >> 8) & 0xff
+            blue = color & 0xff
+            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+            offset = dst_y * stride + dst_x * 2
+            frame[offset:offset + 2] = int(value).to_bytes(2, "little")
+        else:
+            offset = dst_y * stride + dst_x * 4
+            frame[offset:offset + 4] = int(color).to_bytes(4, "little")
+
+    if width == WIDTH and height == HEIGHT:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(x, y, int(src[y * WIDTH + x]))
+    else:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(y, WIDTH - 1 - x, int(src[y * WIDTH + x]))
+    view = memoryview(frame)
+    written = 0
+    while written < len(frame):
+        written += os.pwrite(framebuffer, view[written:], written)
+
 
 FONT = {
     " ": ("00000",) * 7,
@@ -253,38 +362,40 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
     fill_rect(canvas, 3, 30, WIDTH - 6, 1, DARK_GREEN)
 
     if screen == "about":
-        draw_text(canvas, 8, 38, "VERSION", GRAY)
-        draw_text(canvas, 68, 38, MENU_VERSION, YELLOW)
-        draw_text(canvas, 8, 58, "SYSTEM", GRAY)
-        draw_text(canvas, 8, 69, "POCKETBEAGLE 2", WHITE)
-        draw_text(canvas, 8, 80, "ARMBIAN LINUX", WHITE)
-        draw_text(canvas, 8, 100, "GITHUB", GRAY)
-        draw_text(canvas, 8, 111, "@GRIPPY98", GREEN)
-        fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
-        draw_text(canvas, 5, 151, "B:BACK", GRAY)
-        os.pwrite(framebuffer, canvas.tobytes(), 0)
+        draw_text(canvas, 16, 48, "VERSION", GRAY)
+        draw_text(canvas, 100, 48, MENU_VERSION, YELLOW)
+        draw_text(canvas, 16, 78, "SYSTEM", GRAY)
+        draw_text(canvas, 16, 92, "POCKETBEAGLE 2", WHITE)
+        draw_text(canvas, 16, 106, "ARMBIAN LINUX", WHITE)
+        draw_text(canvas, 16, 136, "DISPLAY", GRAY)
+        draw_text(canvas, 16, 150, "ILI9341 320X240", WHITE)
+        draw_text(canvas, 16, 178, "GITHUB", GRAY)
+        draw_text(canvas, 16, 192, "@GRIPPY98", GREEN)
+        fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
+        draw_text(canvas, 8, 228, "B:BACK", GRAY)
+        present_canvas(framebuffer, canvas)
         return
 
     items = menu_items(games, screen)
-    visible = 10
+    visible = 16
     first = max(0, min(selected - visible // 2, len(items) - visible))
     for row_index, item_index in enumerate(range(first, min(first + visible, len(items)))):
-        y = 35 + row_index * 11
+        y = 38 + row_index * 11
         if item_index == selected:
             fill_rect(canvas, 2, y - 2, WIDTH - 4, 10, BLUE)
             color = YELLOW
         else:
             color = WHITE
-        draw_text(canvas, 5, y, items[item_index][:20], color)
+        draw_text(canvas, 8, y, items[item_index][:48], color)
         slider = None
         if screen == "settings" and item_index == 2:
-            slider = (68, 54, BRIGHTNESS_LEVELS,
+            slider = (200, 96, BRIGHTNESS_LEVELS,
                       BRIGHTNESS_LEVELS.index(normalized_brightness_level()))
         elif screen == "second" and item_index == 1:
-            slider = (68, 54, OLED_BRIGHTNESS_LEVELS,
+            slider = (200, 96, OLED_BRIGHTNESS_LEVELS,
                       OLED_BRIGHTNESS_LEVELS.index(oled_brightness_level()))
         elif screen == "second" and item_index == 2:
-            slider = (80, 42, OLED_REFRESH_LEVELS,
+            slider = (220, 72, OLED_REFRESH_LEVELS,
                       OLED_REFRESH_LEVELS.index(oled_refresh_rate()))
         if slider:
             slider_x, slider_width, levels, position = slider
@@ -294,7 +405,7 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
             fill_rect(canvas, knob_x, y, 3, 7, color)
 
     page = f"{selected + 1}/{len(items)}"
-    fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
+    fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
     if screen == "home":
         muted = MUTE_FILE.exists()
         footer = "SOUND:MUTED" if muted else "SOUND:ON"
@@ -312,9 +423,9 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         footer_color = GRAY
     else:
         footer, footer_color = "B:BACK", GRAY
-    draw_text(canvas, 5, 151, footer, footer_color)
-    draw_text(canvas, WIDTH - len(page) * 6 - 3, 151, page, YELLOW)
-    os.pwrite(framebuffer, canvas.tobytes(), 0)
+    draw_text(canvas, 8, 228, footer, footer_color)
+    draw_text(canvas, WIDTH - len(page) * 6 - 6, 228, page, YELLOW)
+    present_canvas(framebuffer, canvas)
 
 
 def read_selected_index(games: list[Path]) -> int:
@@ -388,14 +499,14 @@ def import_usb_roms() -> list[str]:
             [ROM_IMPORT, "-n", ROM_IMPORT_HELPER], check=False,
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as error:
-        return ["IMPORT FAILED", str(error).upper()[:20]]
+        return ["IMPORT FAILED", str(error).upper()[:48]]
 
     values = {}
     for line in completed.stdout.splitlines():
         key, _, value = line.partition(" ")
         values[key] = value.strip()
     if values.get("RESULT") != "OK":
-        return ["IMPORT FAILED", values.get("MESSAGE", "CHECK USB DRIVE")[:20]]
+        return ["IMPORT FAILED", values.get("MESSAGE", "CHECK USB DRIVE")[:48]]
     return [
         f"ADDED {values.get('IMPORTED', '0')}",
         f"UPDATED {values.get('REPLACED', '0')}",
@@ -408,8 +519,8 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     title = "USB ROM IMPORT"
     title_width = (len(title) * 6 - 1)
-    draw_text(canvas, (WIDTH - title_width) // 2, 3, title, GREEN)
-    fill_rect(canvas, 3, 16, WIDTH - 6, 1, DARK_GREEN)
+    draw_text(canvas, (WIDTH - title_width) // 2, 8, title, GREEN)
+    fill_rect(canvas, 3, 24, WIDTH - 6, 1, DARK_GREEN)
     if result is None:
         lines = [
             "1 DRAG FILES TO",
@@ -422,13 +533,13 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
         ]
     else:
         lines = result
-    for index, line in enumerate(lines[:8]):
+    for index, line in enumerate(lines[:10]):
         color = YELLOW if index == 0 and result is not None else WHITE
-        draw_text(canvas, 4, 28 + index * 13, line[:20], color)
-    fill_rect(canvas, 3, 148, WIDTH - 6, 1, DARK_GREEN)
-    draw_text(canvas, 4, 151, "B BACK", GRAY)
-    draw_text(canvas, 70, 151, "A IMPORT", GREEN)
-    os.pwrite(framebuffer, canvas.tobytes(), 0)
+        draw_text(canvas, 16, 40 + index * 16, line[:48], color)
+    fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
+    draw_text(canvas, 8, 228, "B BACK", GRAY)
+    draw_text(canvas, 200, 228, "A IMPORT", GREEN)
+    present_canvas(framebuffer, canvas)
 
 
 def silence_buzzer():
@@ -484,7 +595,11 @@ def toggle_menu_beeps():
 
 
 def brightness_level() -> int:
-    for source in (BRIGHTNESS_FILE, BACKLIGHT):
+    sources = [BRIGHTNESS_FILE]
+    path = backlight_path()
+    if path is not None:
+        sources.append(path)
+    for source in sources:
         try:
             return int(source.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
@@ -500,8 +615,11 @@ def normalized_brightness_level() -> int:
 def apply_saved_brightness():
     if not BRIGHTNESS_FILE.exists():
         return
+    path = backlight_path()
+    if path is None:
+        return
     try:
-        BACKLIGHT.write_text(f"{brightness_level()}\n", encoding="utf-8")
+        path.write_text(f"{brightness_level()}\n", encoding="utf-8")
     except OSError as error:
         print(f"Unable to restore backlight brightness: {error}", file=sys.stderr)
 
@@ -513,8 +631,12 @@ def adjust_brightness(direction: int) -> bool:
     if new_position == position:
         return False
     level = BRIGHTNESS_LEVELS[new_position]
+    path = backlight_path()
+    if path is None:
+        print("No backlight sysfs node found.", file=sys.stderr)
+        return False
     try:
-        BACKLIGHT.write_text(f"{level}\n", encoding="utf-8")
+        path.write_text(f"{level}\n", encoding="utf-8")
         BRIGHTNESS_FILE.write_text(f"{level}\n", encoding="utf-8")
     except OSError as error:
         print(f"Unable to change backlight brightness: {error}", file=sys.stderr)
@@ -628,6 +750,35 @@ def toggle_setting(path: Path):
         print(f"Unable to change {path.name}: {error}", file=sys.stderr)
 
 
+def claim_display() -> None:
+    """Keep Linux fbcon/TTY from painting over the GamePup framebuffer."""
+    grant_backlight_access()
+    for command in (
+        ["sudo", "-n", FBCON, "detach"],
+        [FBCON, "detach"],
+    ):
+        try:
+            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            continue
+
+
+def open_buttons() -> int:
+    for path in (INPUT, INPUT_FALLBACK):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            fcntl.ioctl(fd, EVIOCGRAB, 1)
+        except OSError as error:
+            print(f"Unable to grab {path}: {error}", file=sys.stderr)
+        return fd
+    raise OSError(f"Unable to open GamePup buttons ({INPUT})")
+
+
 def run_menu(games: list[Path]) -> int:
     screen = "home"
     import_status_time = modification_time(ROM_IMPORT_STATUS)
@@ -642,8 +793,9 @@ def run_menu(games: list[Path]) -> int:
         "second": 0,
         "about": 0,
     }
+    claim_display()
     framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-    input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    input_fd = open_buttons()
 
     try:
         draw_menu(framebuffer, games, screen, selected[screen])
@@ -707,7 +859,8 @@ def run_menu(games: list[Path]) -> int:
                             if not running:
                                 return 0
                             framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                            input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                            claim_display()
+                            input_fd = open_buttons()
                             wait_for_launch_keys_to_release(input_fd)
                             games[:] = installed_games()
                             screen = "home"
@@ -734,7 +887,8 @@ def run_menu(games: list[Path]) -> int:
                         if not running:
                             return 0
                         framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                        claim_display()
+                        input_fd = open_buttons()
                         wait_for_launch_keys_to_release(input_fd)
                         games[:] = installed_games()
                         selected[screen] = read_selected_index(platform_games(games, screen))
@@ -754,7 +908,8 @@ def run_menu(games: list[Path]) -> int:
                         if not running:
                             return 0
                         framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                        input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                        claim_display()
+                        input_fd = open_buttons()
                         wait_for_launch_keys_to_release(input_fd)
                         draw_menu(framebuffer, games, screen, selected[screen])
                         break
@@ -772,7 +927,8 @@ def run_menu(games: list[Path]) -> int:
                             if not running:
                                 return 0
                             framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-                            input_fd = os.open(INPUT, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+                            claim_display()
+                            input_fd = open_buttons()
                             wait_for_launch_keys_to_release(input_fd)
                             draw_menu(framebuffer, games, screen, selected[screen])
                             break

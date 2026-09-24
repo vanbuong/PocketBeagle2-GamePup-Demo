@@ -1,14 +1,22 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 # Temporarily give the GamePup application exclusive ownership of /dev/fb0.
+#
+# Detach unbinds the framebuffer console (fbcon) and puts the active virtual
+# terminal into graphics mode so gpio-keys (arrow/enter) cannot paint ANSI
+# escape junk over the GamePup UI. Attach reverses that for EXIT TO TTY.
 
 set -eu
 
 case "${1:-}" in
-	detach) requested=0 ;;
-	attach) requested=1 ;;
+	detach) requested=0; kd_mode=1 ;; # KD_GRAPHICS
+	attach) requested=1; kd_mode=0 ;; # KD_TEXT
 	*) echo "usage: $0 detach|attach" >&2; exit 2 ;;
 esac
+
+if [ -w /sys/class/graphics/fbcon/cursor_blink ]; then
+	printf '%s' "$requested" > /sys/class/graphics/fbcon/cursor_blink
+fi
 
 for console in /sys/class/vtconsole/vtcon*; do
 	[ -r "$console/name" ] || continue
@@ -19,3 +27,26 @@ for console in /sys/class/vtconsole/vtcon*; do
 	[ "$(cat "$console/bind")" = "$requested" ] ||
 		printf '%s' "$requested" > "$console/bind"
 done
+
+# KDSETMODE on the foreground VT (best-effort; requires root).
+python3 - "$kd_mode" <<'PY' 2>/dev/null || true
+import array
+import fcntl
+import os
+import sys
+
+KDSETMODE = 0x4B3A
+mode = array.array("i", [int(sys.argv[1])])
+for path in ("/dev/tty0", "/dev/tty1", "/dev/console"):
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        continue
+    try:
+        fcntl.ioctl(fd, KDSETMODE, mode, True)
+        break
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+PY

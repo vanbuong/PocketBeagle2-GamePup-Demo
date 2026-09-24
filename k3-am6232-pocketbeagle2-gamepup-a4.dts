@@ -84,17 +84,21 @@
 	};
 
 	/*
-	 * GamePup mikroBUS socket 2 control signals for OLED C Click:
-	 * AN=R/W, RST=reset, PWM=D/C and INT=display power enable.
+	 * EC11 rotary encoder on the former OLED C Click control pins:
+	 * AN=A, INT=B, RST=switch.  The 1.3" SH1106 OLED uses mikroBUS I2C
+	 * (main_i2c2 / P1.26 SDA + P1.28 SCL) at address 0x3C.
 	 */
-	gamepup_oledc_control_pins: gamepup-oledc-control-pins {
+	gamepup_encoder_ab_pins: gamepup-encoder-ab-pins {
 		pinctrl-single,pins = <
-			0x017c 0x010007 /* P1.19: OLED R/W, GPIO1_1 output */
-			0x0180 0x010007 /* P1.34: OLED EN, GPIO1_2 output */
-			0x01a0 0x010007 /* P1.02 E18: OLED reset, GPIO1_10 output */
+			0x017c 0x060007 /* P1.19: ENC A, GPIO1_1 input pull-up */
+			0x0180 0x060007 /* P1.34: ENC B, GPIO1_2 input pull-up */
+		>;
+	};
+
+	gamepup_encoder_sw_pins: gamepup-encoder-sw-pins {
+		pinctrl-single,pins = <
+			0x01a0 0x060007 /* P1.02 E18: ENC SW, GPIO1_10 input pull-up */
 			0x0164 0x200007 /* P1.02 alternate AM62x pad disabled */
-			0x01e8 0x010007 /* P1.36 B17: OLED D/C, GPIO1_28 output */
-			0x00e0 0x200007 /* P1.36 alternate AM62x pad disabled */
 		>;
 	};
 };
@@ -106,8 +110,14 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
+	/*
+	 * ILI9341 240x320 panel driven by the DRM tiny ili9341 driver.
+	 * rotation 90 yields a landscape 320x240 framebuffer.  Use 270 if
+	 * the image is upside-down on your panel.  The adafruit,yx240qv29
+	 * compatible string is what the out-of-tree ili9341 module matches.
+	 */
 	display@0 {
-		compatible = "jianda,jd-t18003-t01", "sitronix,st7735r";
+		compatible = "adafruit,yx240qv29";
 		reg = <0>;
 		spi-max-frequency = <32000000>;
 		pinctrl-names = "default";
@@ -115,11 +125,11 @@
 		dc-gpios = <&main_gpio0 64 0>;
 		reset-gpios = <&main_gpio1 0 0>;
 		backlight = <&gamepup_backlight>;
-		rotation = <0>;
+		rotation = <90>;
 	};
 };
 
-/* The GamePup Click socket uses the original PocketBeagle SPI1 pins. */
+/* Click SPI remains available; encoder GPIOs are claimed separately. */
 &main_spi0 {
 	status = "okay";
 	#address-cells = <1>;
@@ -129,8 +139,6 @@
 		compatible = "rohm,dh2228fv";
 		reg = <0>;
 		spi-max-frequency = <18000000>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&gamepup_oledc_control_pins>;
 	};
 };
 
@@ -142,7 +150,7 @@
 
 &epwm2 {
 	status = "okay";
-	/* P1.36 is OLED D/C; the buzzer supplies its P1.33 pinctrl below. */
+	/* Keep P1.36 free; the buzzer supplies its P1.33 pinctrl below. */
 	pinctrl-names = "default";
 	pinctrl-0 = <>;
 };
@@ -268,5 +276,29 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&gamepup_buzzer_pwm_pin>;
 		pwms = <&epwm2 1 250000 0>;
+	};
+
+	gamepup_encoder: gamepup-encoder {
+		compatible = "rotary-encoder";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_encoder_ab_pins>;
+		gpios = <&main_gpio1 1 1>, <&main_gpio1 2 1>;
+		linux,axis = <7>; /* REL_DIAL */
+		rotary-encoder,relative-axis;
+		rotary-encoder,steps-per-period = <4>;
+		rotary-encoder,encoding = "gray";
+	};
+
+	gamepup-encoder-button {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_encoder_sw_pins>;
+
+		button {
+			label = "gamepup-encoder";
+			gpios = <&main_gpio1 10 1>;
+			linux,code = <28>; /* KEY_ENTER */
+			debounce-interval = <20>;
+		};
 	};
 };

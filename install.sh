@@ -11,7 +11,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 KERNEL_VERSION=$(uname -r)
 UPSTREAM_VERSION=v${KERNEL_VERSION%%-*}
 KERNEL_CC=${KERNEL_CC:-gcc-14}
-MODULE_SOURCE_DIR=/usr/src/gamepup-st7735r-$KERNEL_VERSION
+MODULE_SOURCE_DIR=/usr/src/gamepup-ili9341-$KERNEL_VERSION
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
 OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
 OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
@@ -20,7 +20,7 @@ DEVICE_USER=${DEVICE_USER:-beagle}
 
 missing_packages=
 for package in build-essential ca-certificates curl device-tree-compiler \
-	dosfstools gcc-14 libegl-dev libgif-dev libgles-dev; do
+	dosfstools gcc-14 libgif-dev; do
 	if ! dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | \
 		grep -q '^ii'; then
 		missing_packages="$missing_packages $package"
@@ -54,13 +54,13 @@ install -m 0644 "$SCRIPT_DIR/Makefile" "$MODULE_SOURCE_DIR/Makefile"
 
 curl -fsSLo "$MODULE_SOURCE_DIR/drm_mipi_dbi.c" \
 	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/drm_mipi_dbi.c"
-curl -fsSLo "$MODULE_SOURCE_DIR/st7735r.c" \
-	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/tiny/st7735r.c"
+curl -fsSLo "$MODULE_SOURCE_DIR/ili9341.c" \
+	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/tiny/ili9341.c"
 
 make -C "/lib/modules/$KERNEL_VERSION/build" M="$MODULE_SOURCE_DIR" \
 	CC="$KERNEL_CC" modules
 install -m 0644 "$MODULE_SOURCE_DIR/drm_mipi_dbi.ko" "$MODULE_INSTALL_DIR/"
-install -m 0644 "$MODULE_SOURCE_DIR/st7735r.ko" "$MODULE_INSTALL_DIR/"
+install -m 0644 "$MODULE_SOURCE_DIR/ili9341.ko" "$MODULE_INSTALL_DIR/"
 depmod -a "$KERNEL_VERSION"
 
 dtc -@ -I dts -O dtb -o "$OVERLAY_TARGET" \
@@ -76,15 +76,47 @@ if id "$DEVICE_USER" >/dev/null 2>&1; then
 fi
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=spidev
+udevadm trigger --subsystem-match=i2c-dev
+udevadm trigger --subsystem-match=input
 
 install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/local/sbin
-make -C "$SCRIPT_DIR/emulator" all
-install -m 0755 "$SCRIPT_DIR/emulator/gamepup-retro" \
-	/usr/local/bin/gamepup-retro
+# Khronos headers are vendored under emulator/khronos so we never need Mesa
+# libegl-dev (it Conflicts with TI libegl-mesa0-pvr). Link against whatever
+# libEGL is present; if none, install Mesa runtime only when TI PVR is absent.
+egl_link_ok=0
+if echo 'int main(void){return 0;}' | gcc -x c - -lEGL -lGLESv2 \
+	-o /tmp/gamepup-egl-check 2>/dev/null; then
+	egl_link_ok=1
+	rm -f /tmp/gamepup-egl-check
+elif ! dpkg-query -W -f='${db:Status-Abbrev}' ti-img-rogue-umlibs-am62 \
+	2>/dev/null | grep -q '^ii'; then
+	apt-get install -y --no-install-recommends libegl1 libgles2 || true
+	if echo 'int main(void){return 0;}' | gcc -x c - -lEGL -lGLESv2 \
+		-o /tmp/gamepup-egl-check 2>/dev/null; then
+		egl_link_ok=1
+		rm -f /tmp/gamepup-egl-check
+	fi
+fi
+make -C "$SCRIPT_DIR/emulator" clean
+if [ "$egl_link_ok" = 1 ] && make -C "$SCRIPT_DIR/emulator" all; then
+	:
+elif make -C "$SCRIPT_DIR/emulator" apps; then
+	echo "Built without GLES apps; run emulator/install-gpu.sh to install" \
+		"TI PowerVR and build gamepup-retro / gamepup-gpu-bench." >&2
+else
+	echo "Failed to build GamePup userspace apps." >&2
+	exit 1
+fi
+if [ -e "$SCRIPT_DIR/emulator/gamepup-retro" ]; then
+	install -m 0755 "$SCRIPT_DIR/emulator/gamepup-retro" \
+		/usr/local/bin/gamepup-retro
+fi
 install -m 0755 "$SCRIPT_DIR/emulator/gamepup-oled-status" \
 	/usr/local/bin/gamepup-oled-status
-install -m 0755 "$SCRIPT_DIR/emulator/gamepup-gpu-bench" \
-	/usr/local/bin/gamepup-gpu-bench
+if [ -e "$SCRIPT_DIR/emulator/gamepup-gpu-bench" ]; then
+	install -m 0755 "$SCRIPT_DIR/emulator/gamepup-gpu-bench" \
+		/usr/local/bin/gamepup-gpu-bench
+fi
 install -d -m 0755 /opt/gamepup/gifs
 install -m 0644 "$SCRIPT_DIR/emulator/gifs/"*.gif /opt/gamepup/gifs/
 install -d -m 0755 /usr/local/share/gamepup/bezels
@@ -141,7 +173,8 @@ if ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
 fi
 
 modprobe drm_mipi_dbi
-modprobe st7735r
+modprobe ili9341
 
 echo "GamePup A4 support installed for kernel $KERNEL_VERSION."
+echo "ILI9341 landscape 320x240 framebuffer will appear after reboot."
 echo "Reboot to apply the overlay."
