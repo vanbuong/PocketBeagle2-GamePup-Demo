@@ -268,8 +268,15 @@ the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
 - I2S audio: ALSA card `GamePup-MAX98357` (MAX98357A playback on McASP2);
 - EEPROM: `/sys/bus/i2c/devices/2-0057/eeprom`.
 
-When the PocketBeagle 2 device USB port is connected to a computer, the
-composite gadget also presents a writable 2 GB FAT32 volume named `GAMEPUP`.
+When the PocketBeagle 2 **USB-C device port** is connected to a computer, the
+`pb2-usb-gadget.service` composite gadget presents a writable FAT32 volume
+named `GAMEPUP` (plus USB networking and serial). Use that port, not the cape
+USB host jack. The installer enables the unit; to start it by hand:
+
+```sh
+sudo systemctl enable --now pb2-usb-gadget.service
+# or: sudo /usr/local/sbin/pb2-usb-gadget-ncm-acm start
+```
 
 The installer adds `beagle` to `i2c` and a new `spi` group. The stock image
 already puts `beagle` in `input` and `video`. Group changes take effect at the

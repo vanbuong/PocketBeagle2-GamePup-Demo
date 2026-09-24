@@ -142,6 +142,8 @@ install -m 0755 "$SCRIPT_DIR/emulator/gamepup-fbcon" \
 	/usr/local/libexec/gamepup-fbcon
 install -m 0755 "$SCRIPT_DIR/emulator/pb2-usb-gadget-ncm-acm-storage" \
 	/usr/local/sbin/pb2-usb-gadget-ncm-acm
+install -m 0644 "$SCRIPT_DIR/emulator/pb2-usb-gadget.service" \
+	/etc/systemd/system/pb2-usb-gadget.service
 install -d -m 0755 /usr/local/share/gamepup/rom-drive /opt/gamepup/saves
 install -m 0644 "$SCRIPT_DIR/emulator/rom-drive/README.txt" \
 	/usr/local/share/gamepup/rom-drive/README.txt
@@ -160,8 +162,9 @@ if id "$DEVICE_USER" >/dev/null 2>&1; then
 fi
 /usr/local/libexec/gamepup-rom-drive-setup
 systemctl daemon-reload
+systemctl enable --now pb2-usb-gadget.service
 systemctl enable gamepup-oled-status.service
-systemctl enable gamepup-rom-import-watch.service
+systemctl enable --now gamepup-rom-import-watch.service
 systemctl enable gamepup-game.service
 
 if ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
