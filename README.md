@@ -271,11 +271,27 @@ the Nintendo 64 core. Download CI zips from the **Cross compile (PocketBeagle
 When the PocketBeagle 2 **USB-C device port** is connected to a computer, the
 `pb2-usb-gadget.service` composite gadget presents a writable FAT32 volume
 named `GAMEPUP` (plus USB networking and serial). Use that port, not the cape
-USB host jack. The installer enables the unit; to start it by hand:
+USB host jack. The installer enables the unit and masks stock
+`bb-usb-gadgets` / `usb-gadget` services so they do not keep the UDC busy.
+To start it by hand:
 
 ```sh
+sudo systemctl disable --now bb-usb-gadgets.service usb-gadget.service 2>/dev/null || true
+sudo systemctl mask bb-usb-gadgets.service usb-gadget.service 2>/dev/null || true
+sudo systemctl daemon-reload
 sudo systemctl enable --now pb2-usb-gadget.service
 # or: sudo /usr/local/sbin/pb2-usb-gadget-ncm-acm start
+# confirm bind: non-empty UDC name
+cat /sys/kernel/config/usb_gadget/pb2/UDC
+```
+
+If `enable --now` fails with functions linked but an empty `UDC`, the device
+controller was still claimed (or the bind raced). Re-install the gadget script
+from this repo, mask the stock units above, then:
+
+```sh
+sudo systemctl restart pb2-usb-gadget.service
+journalctl -u pb2-usb-gadget.service -b --no-pager
 ```
 
 The installer adds `beagle` to `i2c` and a new `spi` group. The stock image
