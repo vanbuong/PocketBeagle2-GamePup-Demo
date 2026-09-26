@@ -15,10 +15,39 @@ fi
 DIST_DIR=${1:-./dist}
 DEVICE_USER=${DEVICE_USER:-beagle}
 KERNEL_VERSION=$(uname -r)
-OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
-OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
-EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
+OVERLAY_NAMES="k3-am62-pocketbeagle2-spi0-ili9341
+k3-am62-pocketbeagle2-gamepup-audio
+k3-am62-pocketbeagle2-spi2-eth-wiz-click"
+EXTLINUX_CONFIG=
+for candidate in /boot/firmware/extlinux/extlinux.conf \
+	/boot/extlinux/extlinux.conf; do
+	if [ -f "$candidate" ]; then
+		EXTLINUX_CONFIG=$candidate
+		break
+	fi
+done
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
+
+resolve_overlay_dir() {
+	for d in /boot/firmware/overlays /boot/overlays /boot/dtb/ti \
+		/boot/firmware/ti; do
+		if [ -d "$d" ]; then
+			printf '%s\n' "$d"
+			return 0
+		fi
+	done
+	install -d -m 0755 /boot/dtb/ti
+	printf '%s\n' /boot/dtb/ti
+}
+
+overlay_extlinux_path() {
+	abs=$1
+	case "$abs" in
+		/boot/firmware/*) printf '/%s\n' "${abs#/boot/firmware/}" ;;
+		/boot/*) printf '/%s\n' "${abs#/boot/}" ;;
+		*) printf '%s\n' "$abs" ;;
+	esac
+}
 
 [ -d "$DIST_DIR/bin" ] || {
 	echo "Missing $DIST_DIR/bin — pass the cross-build dist directory." >&2
@@ -60,14 +89,18 @@ if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
 		/etc/modules-load.d/gamepup-alsa.conf
 	modprobe snd-soc-davinci-mcasp 2>/dev/null || true
 	modprobe snd-soc-max98357a 2>/dev/null || true
-	modprobe snd-soc-audio-graph-card 2>/dev/null || true
+	modprobe snd-soc-simple-card 2>/dev/null || true
 	# Re-bind if the card probed before both DAIs were registered.
 	if [ -e /sys/bus/platform/devices/sound-gamepup ]; then
-		echo sound-gamepup > /sys/bus/platform/drivers/asoc-audio-graph-card/unbind 2>/dev/null || true
-		echo sound-gamepup > /sys/bus/platform/drivers/asoc-audio-graph-card/bind 2>/dev/null || true
 		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/unbind 2>/dev/null || true
 		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/bind 2>/dev/null || true
 	fi
+fi
+
+if [ -f "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" ]; then
+	install -d -m 0755 /etc/alsa/conf.d
+	install -m 0644 "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" \
+		/etc/alsa/conf.d/50-gamepup-softvol.conf
 fi
 
 # Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
@@ -89,35 +122,48 @@ if [ -d "$DIST_DIR/modules" ]; then
 	modprobe ili9341 || true
 fi
 
-if [ -f "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" ]; then
-	install -d -m 0755 /boot/dtb/ti
-	install -m 0644 "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" "$OVERLAY_TARGET"
-	# Some images also keep a copy under /boot/dtbs/<kver>/ti/
+OVERLAY_DIR=$(resolve_overlay_dir)
+install -d -m 0755 "$OVERLAY_DIR"
+fdtoverlays_args=
+for OVERLAY_NAME in $OVERLAY_NAMES; do
+	src="$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo"
+	[ -f "$src" ] || continue
+	dst="$OVERLAY_DIR/$OVERLAY_NAME.dtbo"
+	install -m 0644 "$src" "$dst"
 	if [ -d "/boot/dtbs/$KERNEL_VERSION/ti" ]; then
-		install -m 0644 "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" \
+		install -m 0644 "$src" \
 			"/boot/dtbs/$KERNEL_VERSION/ti/$OVERLAY_NAME.dtbo"
 	fi
-	if [ -f "$EXTLINUX_CONFIG" ] && ! grep -qF "$OVERLAY_NAME.dtbo" "$EXTLINUX_CONFIG"; then
-		if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-a4" ]; then
-			cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-a4"
-		fi
-		sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays /dtb/ti/$OVERLAY_NAME.dtbo" \
-			"$EXTLINUX_CONFIG"
+	fdtoverlays_args="$fdtoverlays_args $(overlay_extlinux_path "$dst")"
+	echo "Installed overlay: $dst"
+done
+if [ -n "$fdtoverlays_args" ] && [ -n "$EXTLINUX_CONFIG" ]; then
+	if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-a4" ]; then
+		cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-a4"
 	fi
-	echo "Installed overlay: $OVERLAY_TARGET"
-	echo "After reboot verify audio DT with:"
-	echo "  cat /proc/device-tree/chosen/overlays/gamepup-a4-audio"
-	echo "  ls /proc/device-tree/sound-gamepup"
-	echo "  ls /proc/device-tree/gamepup-max98357a"
-	echo "  cat /proc/device-tree/bus@f0000/audio-controller@2b20000/status"
+	sed -i \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*gamepup/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-spi0-ili9341/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-gamepup-audio/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-spi2-eth-wiz/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am6232-pocketbeagle2-gamepup-a4/d' \
+		"$EXTLINUX_CONFIG"
+	if grep -q '^[[:space:]]*fdt[[:space:]]' "$EXTLINUX_CONFIG"; then
+		sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays$fdtoverlays_args" \
+			"$EXTLINUX_CONFIG"
+	else
+		printf '  fdtoverlays%s\n' "$fdtoverlays_args" >> "$EXTLINUX_CONFIG"
+	fi
+	echo "After reboot verify:"
+	echo "  cat /proc/device-tree/chosen/overlays/gamepup-audio"
+	echo "  ls /proc/device-tree/sound-gamepup /proc/device-tree/gamepup-max98357a"
+	echo "  ls /sys/class/net/ | grep -E 'eth|en'"
 fi
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then
-	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
-		/opt/gamepup/games /opt/gamepup/voice-memos /opt/gamepup/music \
-		2>/dev/null || true
-	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/games/doom \
-		"/opt/gamepup/games/doom/Doom Shareware.wad"
+	install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 /opt/gamepup
+	touch /opt/gamepup/selected-rom
+	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup 2>/dev/null || true
 fi
 
 echo "Installed cross-build artifacts from $DIST_DIR."

@@ -78,7 +78,9 @@ jobs:
           file dist/libretro/gambatte_libretro.so | grep -q 'ARM aarch64'
           file dist/libretro/prboom_libretro.so | grep -q 'ARM aarch64'
           file dist/libretro/mupen64plus_next_libretro.so | grep -q 'ARM aarch64'
-          test -f dist/dtbo/k3-am6232-pocketbeagle2-gamepup-a4.dtbo
+          test -f dist/dtbo/k3-am62-pocketbeagle2-spi0-ili9341.dtbo
+          test -f dist/dtbo/k3-am62-pocketbeagle2-gamepup-audio.dtbo
+          test -f dist/dtbo/k3-am62-pocketbeagle2-spi2-eth-wiz-click.dtbo
           test -f dist/modules/KERNEL_VERSION.txt
           cat dist/MANIFEST.txt
 

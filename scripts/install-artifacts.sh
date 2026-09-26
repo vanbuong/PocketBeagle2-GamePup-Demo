@@ -53,13 +53,17 @@ if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
 		/etc/modules-load.d/gamepup-alsa.conf
 	modprobe snd-soc-davinci-mcasp 2>/dev/null || true
 	modprobe snd-soc-max98357a 2>/dev/null || true
-	modprobe snd-soc-audio-graph-card 2>/dev/null || true
+	modprobe snd-soc-simple-card 2>/dev/null || true
 	if [ -e /sys/bus/platform/devices/sound-gamepup ]; then
-		echo sound-gamepup > /sys/bus/platform/drivers/asoc-audio-graph-card/unbind 2>/dev/null || true
-		echo sound-gamepup > /sys/bus/platform/drivers/asoc-audio-graph-card/bind 2>/dev/null || true
 		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/unbind 2>/dev/null || true
 		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/bind 2>/dev/null || true
 	fi
+fi
+
+if [ -f "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" ]; then
+	install -d -m 0755 /etc/alsa/conf.d
+	install -m 0644 "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" \
+		/etc/alsa/conf.d/50-gamepup-softvol.conf
 fi
 
 # Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
@@ -75,11 +79,9 @@ install -m 0644 /usr/share/games/doom/doom1.wad \
 	"/opt/gamepup/games/doom/Doom Shareware.wad"
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then
-	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
-		/opt/gamepup/games /opt/gamepup/voice-memos /opt/gamepup/music \
-		2>/dev/null || true
-	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/games/doom \
-		"/opt/gamepup/games/doom/Doom Shareware.wad"
+	install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 /opt/gamepup
+	touch /opt/gamepup/selected-rom
+	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup 2>/dev/null || true
 fi
 
 echo "Installed userspace artifacts from $DIST_DIR:"

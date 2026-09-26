@@ -18,7 +18,10 @@ WIDTH = 320
 HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
-BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
+BUZZER_CANDIDATES = (
+    "/dev/input/by-path/platform-gamepup-buzzer-event",
+    "/dev/input/by-path/platform-pwm-beeper-event",
+)
 LEFT_LED = Path("/sys/class/leds/gamepup:left-eye/brightness")
 RIGHT_LED = Path("/sys/class/leds/gamepup:right-eye/brightness")
 BACKLIGHT_PERMISSIONS = "/usr/local/libexec/gamepup-backlight-permissions"
@@ -354,10 +357,42 @@ def keys_down(input_fd: int) -> set[int]:
             if key_bits[code // 8] & (1 << (code % 8))}
 
 
+def resolve_buzzer_path():
+    for candidate in BUZZER_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+    by_path = Path("/dev/input/by-path")
+    if by_path.is_dir():
+        for pattern in ("*buzzer*", "*pwm-beeper*", "*pwm_beeper*"):
+            matches = sorted(by_path.glob(pattern))
+            if matches:
+                return str(matches[0])
+    for name_path in Path("/sys/class/input").glob("event*/device/name"):
+        try:
+            name = name_path.read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        lowered = name.casefold()
+        if name in ("gamepup-buzzer", "pwm-beeper") or "buzzer" in lowered \
+                or "beeper" in lowered:
+            return f"/dev/input/{name_path.parent.parent.name}"
+    return None
+
+
 def run_test(self_test_only: bool = False) -> int:
     grant_backlight_access()
     framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-    buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    buzzer_path = resolve_buzzer_path()
+    if not buzzer_path:
+        print("PWM buzzer input device not found. Check overlay:", file=sys.stderr)
+        print("  ls /proc/device-tree/gamepup-buzzer", file=sys.stderr)
+        print("  ls /sys/bus/platform/devices/ | grep -iE 'buzzer|beeper|epwm|pwm'",
+              file=sys.stderr)
+        print("  grep -iE 'beeper|buzzer|epwm2|23020000' /var/log/dmesg dmesg 2>/dev/null | tail",
+              file=sys.stderr)
+        return 1
+    print(f"Buzzer device: {buzzer_path}", file=sys.stderr)
+    buzzer_fd = os.open(buzzer_path, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     input_fd = -1
     original_brightness = brightness_value()
     try:

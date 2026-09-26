@@ -13,14 +13,72 @@ UPSTREAM_VERSION=v${KERNEL_VERSION%%-*}
 KERNEL_CC=${KERNEL_CC:-gcc-14}
 MODULE_SOURCE_DIR=/usr/src/gamepup-ili9341-$KERNEL_VERSION
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
-OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
-OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
-EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
-DEVICE_USER=${DEVICE_USER:-beagle}
+# Split overlays: LCD on SPI0, audio/controls, Eth Wiz on SPI2.
+OVERLAY_NAMES="k3-am62-pocketbeagle2-spi0-ili9341
+k3-am62-pocketbeagle2-gamepup-audio
+k3-am62-pocketbeagle2-spi2-eth-wiz-click"
+EXTLINUX_CONFIG=
+for candidate in /boot/firmware/extlinux/extlinux.conf \
+	/boot/extlinux/extlinux.conf; do
+	if [ -f "$candidate" ]; then
+		EXTLINUX_CONFIG=$candidate
+		break
+	fi
+done
+# Prefer an existing login account. Stock Armbian uses "beagle"; some images
+# use another UID>=1000 name (e.g. buongvv). Override with DEVICE_USER=.
+resolve_device_user() {
+	if [ -n "${DEVICE_USER:-}" ]; then
+		printf '%s\n' "$DEVICE_USER"
+		return 0
+	fi
+	# Who ran sudo ./install.sh — usually the board login (e.g. buongvv).
+	if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] &&
+		id "$SUDO_USER" >/dev/null 2>&1; then
+		printf '%s\n' "$SUDO_USER"
+		return 0
+	fi
+	for candidate in beagle debian ubuntu; do
+		if id "$candidate" >/dev/null 2>&1; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+	# First non-system login user (uid >= 1000), excluding nobody.
+	awk -F: '$3 >= 1000 && $1 != "nobody" { print $1; exit }' /etc/passwd
+}
+
+DEVICE_USER=$(resolve_device_user)
+if [ -z "$DEVICE_USER" ] || ! id "$DEVICE_USER" >/dev/null 2>&1; then
+	echo "No DEVICE_USER found. Set DEVICE_USER=yourlogin and re-run." >&2
+	exit 1
+fi
+echo "GamePup service user: $DEVICE_USER"
+
+resolve_overlay_dir() {
+	for d in /boot/firmware/overlays /boot/overlays /boot/dtb/ti \
+		/boot/firmware/ti; do
+		if [ -d "$d" ]; then
+			printf '%s\n' "$d"
+			return 0
+		fi
+	done
+	install -d -m 0755 /boot/dtb/ti
+	printf '%s\n' /boot/dtb/ti
+}
+
+overlay_extlinux_path() {
+	abs=$1
+	case "$abs" in
+		/boot/firmware/*) printf '/%s\n' "${abs#/boot/firmware/}" ;;
+		/boot/*) printf '/%s\n' "${abs#/boot/}" ;;
+		*) printf '%s\n' "$abs" ;;
+	esac
+}
 
 missing_packages=
 for package in build-essential ca-certificates curl device-tree-compiler \
-	dosfstools gcc-14 libgif-dev; do
+	dosfstools gcc-14 libgif-dev mpv alsa-utils; do
 	if ! dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | \
 		grep -q '^ii'; then
 		missing_packages="$missing_packages $package"
@@ -63,8 +121,26 @@ install -m 0644 "$MODULE_SOURCE_DIR/drm_mipi_dbi.ko" "$MODULE_INSTALL_DIR/"
 install -m 0644 "$MODULE_SOURCE_DIR/ili9341.ko" "$MODULE_INSTALL_DIR/"
 depmod -a "$KERNEL_VERSION"
 
-dtc -@ -I dts -O dtb -o "$OVERLAY_TARGET" \
-	"$SCRIPT_DIR/$OVERLAY_NAME.dts"
+OVERLAY_DIR=$(resolve_overlay_dir)
+install -d -m 0755 "$OVERLAY_DIR"
+fdtoverlays_args=
+for OVERLAY_NAME in $OVERLAY_NAMES; do
+	src="$SCRIPT_DIR/overlays/$OVERLAY_NAME.dts"
+	dst="$OVERLAY_DIR/$OVERLAY_NAME.dtbo"
+	[ -f "$src" ] || {
+		echo "Missing overlay source: $src" >&2
+		exit 1
+	}
+	dtc -@ -I dts -O dtb -o "$dst" "$src"
+	rel=$(overlay_extlinux_path "$dst")
+	fdtoverlays_args="$fdtoverlays_args $rel"
+	# Mirror into /boot/dtbs/<kver>/ti when present (Armbian).
+	if [ -d "/boot/dtbs/$KERNEL_VERSION/ti" ]; then
+		install -m 0644 "$dst" \
+			"/boot/dtbs/$KERNEL_VERSION/ti/$OVERLAY_NAME.dtbo"
+	fi
+	echo "Built overlay: $dst"
+done
 
 if ! getent group spi >/dev/null 2>&1; then
 	groupadd --system spi
@@ -147,19 +223,29 @@ install -m 0644 "$SCRIPT_DIR/emulator/pb2-usb-gadget.service" \
 install -d -m 0755 /usr/local/share/gamepup/rom-drive /opt/gamepup/saves
 install -m 0644 "$SCRIPT_DIR/emulator/rom-drive/README.txt" \
 	/usr/local/share/gamepup/rom-drive/README.txt
-install -m 0440 "$SCRIPT_DIR/emulator/gamepup-rom-import.sudoers" \
-	/etc/sudoers.d/gamepup-rom-import
+# Rewrite hardcoded "beagle" to the board login account.
+sed "s/^beagle /$DEVICE_USER /" \
+	"$SCRIPT_DIR/emulator/gamepup-rom-import.sudoers" \
+	> /etc/sudoers.d/gamepup-rom-import
+chmod 0440 /etc/sudoers.d/gamepup-rom-import
 install -m 0644 "$SCRIPT_DIR/emulator/gamepup-rom-import-watch.service" \
 	/etc/systemd/system/gamepup-rom-import-watch.service
-install -m 0644 "$SCRIPT_DIR/emulator/gamepup-game.service" \
-	/etc/systemd/system/gamepup-game.service
+sed -e "s/^User=beagle$/User=$DEVICE_USER/" \
+	-e "s/^Group=beagle$/Group=$DEVICE_USER/" \
+	"$SCRIPT_DIR/emulator/gamepup-game.service" \
+	> /etc/systemd/system/gamepup-game.service
+chmod 0644 /etc/systemd/system/gamepup-game.service
 visudo -cf /etc/sudoers.d/gamepup-rom-import
-if id "$DEVICE_USER" >/dev/null 2>&1; then
-	install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 \
-		/opt/gamepup/games/nes /opt/gamepup/games/gbc \
-		/opt/gamepup/games/n64 /opt/gamepup/games/doom
-	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/saves /opt/gamepup/gifs
-fi
+install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 \
+	/opt/gamepup /opt/gamepup/games/nes /opt/gamepup/games/gbc \
+	/opt/gamepup/games/n64 /opt/gamepup/games/doom \
+	/opt/gamepup/saves /opt/gamepup/gifs \
+	/opt/gamepup/voice-memos /opt/gamepup/music
+# Menu writes /opt/gamepup/selected-rom as the service user.
+touch /opt/gamepup/selected-rom
+chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup
+usermod -a -G video,render,input,spi,i2c "$DEVICE_USER" 2>/dev/null || \
+	usermod -a -G video,input,spi,i2c "$DEVICE_USER" 2>/dev/null || true
 /usr/local/libexec/gamepup-rom-drive-setup
 systemctl daemon-reload
 # Stock BeagleBoard NCM-only gadgets claim the USB device controller; GamePup
@@ -173,17 +259,42 @@ systemctl enable gamepup-oled-status.service
 systemctl enable --now gamepup-rom-import-watch.service
 systemctl enable gamepup-game.service
 
-if ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
+if [ -n "$EXTLINUX_CONFIG" ]; then
 	if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-a4" ]; then
 		cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-a4"
 	fi
-	sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays /dtb/ti/$OVERLAY_NAME.dtbo" \
+	# Drop prior GamePup / split-overlay fdtoverlays lines, then add the set.
+	sed -i \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*gamepup/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-spi0-ili9341/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-gamepup-audio/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-spi2-eth-wiz/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am6232-pocketbeagle2-gamepup-a4/d' \
 		"$EXTLINUX_CONFIG"
+	if grep -q '^[[:space:]]*fdt[[:space:]]' "$EXTLINUX_CONFIG"; then
+		sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays$fdtoverlays_args" \
+			"$EXTLINUX_CONFIG"
+	else
+		printf '  fdtoverlays%s\n' "$fdtoverlays_args" >> "$EXTLINUX_CONFIG"
+	fi
+	echo "Updated $EXTLINUX_CONFIG with:$fdtoverlays_args"
+else
+	echo "No extlinux.conf found; install dtbos manually from $OVERLAY_DIR" >&2
 fi
+
+install -d -m 0755 /etc/modules-load.d
+install -m 0644 "$SCRIPT_DIR/emulator/gamepup-alsa.conf" \
+	/etc/modules-load.d/gamepup-alsa.conf
+install -d -m 0755 /etc/alsa/conf.d
+install -m 0644 "$SCRIPT_DIR/emulator/gamepup-softvol.conf" \
+	/etc/alsa/conf.d/50-gamepup-softvol.conf
+modprobe snd-soc-davinci-mcasp 2>/dev/null || true
+modprobe snd-soc-max98357a 2>/dev/null || true
+modprobe snd-soc-simple-card 2>/dev/null || true
 
 modprobe drm_mipi_dbi
 modprobe ili9341
 
-echo "GamePup A4 support installed for kernel $KERNEL_VERSION."
-echo "ILI9341 landscape 320x240 framebuffer will appear after reboot."
-echo "Reboot to apply the overlay."
+echo "GamePup support installed for kernel $KERNEL_VERSION."
+echo "Overlays: SPI0 ILI9341 + audio/controls + SPI2 Eth Wiz."
+echo "Reboot to apply the overlays."

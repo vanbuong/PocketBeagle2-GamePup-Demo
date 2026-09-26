@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * DEPRECATED for current PocketBeagle 2 + GamePup layouts.
+ *
+ * Prefer the split overlays under overlays/:
+ *   k3-am62-pocketbeagle2-spi0-ili9341.dts      (LCD on SPI0)
+ *   k3-am62-pocketbeagle2-gamepup-audio.dts     (buttons/buzzer/MAX98357)
+ *   k3-am62-pocketbeagle2-spi2-eth-wiz-click.dts (W5500 on SPI2)
+ *
+ * This monolithic file kept the LCD on SPI2 and is no longer installed by
+ * install.sh.
+ *
  * Portions derived from BBORG_GAMEPUP-00A2.dts:
  * Copyright (C) 2012 Texas Instruments Incorporated - https://www.ti.com/
  */

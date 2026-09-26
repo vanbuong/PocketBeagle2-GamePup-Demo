@@ -155,11 +155,15 @@ fetch_driver_sources() {
 }
 
 build_overlay() {
-	log "Building device-tree overlay"
+	log "Building device-tree overlays"
 	mkdir -p "$DIST_DIR/dtbo"
-	dtc -@ -I dts -O dtb \
-		-o "$DIST_DIR/dtbo/k3-am6232-pocketbeagle2-gamepup-a4.dtbo" \
-		"$ROOT_DIR/k3-am6232-pocketbeagle2-gamepup-a4.dts"
+	for name in k3-am62-pocketbeagle2-spi0-ili9341 \
+		k3-am62-pocketbeagle2-gamepup-audio \
+		k3-am62-pocketbeagle2-spi2-eth-wiz-click; do
+		dtc -@ -I dts -O dtb \
+			-o "$DIST_DIR/dtbo/$name.dtbo" \
+			"$ROOT_DIR/overlays/$name.dts"
+	done
 }
 
 build_userspace() {
@@ -312,6 +316,9 @@ copy_scripts() {
 	install -d -m 0755 "$DIST_DIR/etc/modules-load.d"
 	install -m 0644 "$ROOT_DIR/emulator/gamepup-alsa.conf" \
 		"$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf"
+	install -d -m 0755 "$DIST_DIR/etc/alsa/conf.d"
+	install -m 0644 "$ROOT_DIR/emulator/gamepup-softvol.conf" \
+		"$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf"
 }
 
 main() {

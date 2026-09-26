@@ -20,7 +20,10 @@ HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 INPUT_FALLBACK = "/dev/input/event0"
-BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
+BUZZER_CANDIDATES = (
+    "/dev/input/by-path/platform-gamepup-buzzer-event",
+    "/dev/input/by-path/platform-pwm-beeper-event",
+)
 FBCON = "/usr/local/libexec/gamepup-fbcon"
 BACKLIGHT_PERMISSIONS = "/usr/local/libexec/gamepup-backlight-permissions"
 FRONTEND = "/usr/local/bin/gamepup-retro"
@@ -566,9 +569,34 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
     present_canvas(framebuffer, canvas)
 
 
+def resolve_buzzer_path():
+    for candidate in BUZZER_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+    by_path = Path("/dev/input/by-path")
+    if by_path.is_dir():
+        for pattern in ("*buzzer*", "*pwm-beeper*", "*pwm_beeper*"):
+            matches = sorted(by_path.glob(pattern))
+            if matches:
+                return str(matches[0])
+    for name_path in Path("/sys/class/input").glob("event*/device/name"):
+        try:
+            name = name_path.read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        lowered = name.casefold()
+        if name in ("gamepup-buzzer", "pwm-beeper") or "buzzer" in lowered \
+                or "beeper" in lowered:
+            return f"/dev/input/{name_path.parent.parent.name}"
+    return None
+
+
 def silence_buzzer():
+    path = resolve_buzzer_path()
+    if not path:
+        return
     try:
-        buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        buzzer_fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
         os.write(buzzer_fd, EVENT.pack(0, 0, 0x12, 2, 0))
         os.close(buzzer_fd)
     except OSError:
@@ -577,6 +605,11 @@ def silence_buzzer():
 
 def play_sound(name: str):
     if MUTE_FILE.exists() or MENU_MUTE_FILE.exists():
+        return
+    path = resolve_buzzer_path()
+    if not path:
+        print("PWM buzzer input device not found "
+              "(check gamepup-buzzer / epwm2 overlay)", file=sys.stderr)
         return
     sounds = {
         "up": ((660, 0.022), (880, 0.032)),
@@ -587,12 +620,13 @@ def play_sound(name: str):
     }
     buzzer_fd = -1
     try:
-        buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        buzzer_fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
         for frequency, duration in sounds[name]:
             os.write(buzzer_fd, EVENT.pack(0, 0, 0x12, 2, frequency))
             time.sleep(duration)
         os.write(buzzer_fd, EVENT.pack(0, 0, 0x12, 2, 0))
-    except (KeyError, OSError):
+    except (KeyError, OSError) as error:
+        print(f"Buzzer write failed on {path}: {error}", file=sys.stderr)
         silence_buzzer()
     finally:
         if buzzer_fd >= 0:

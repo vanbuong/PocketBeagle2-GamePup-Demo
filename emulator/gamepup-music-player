@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import select
+from shutil import which as shutil_which
 import signal
 import socket
 import struct
@@ -23,15 +24,24 @@ FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 INPUT_FALLBACK = "/dev/input/event0"
 MUSIC_ROOT = Path("/opt/gamepup/music")
-MPV_SOCKET = Path("/run/gamepup/mpv-music.sock")
 AUDIO_EXTENSIONS = {".mp3", ".ogg", ".flac", ".wav", ".m4a", ".aac", ".opus", ".wma"}
 SEEK_STEP = 5
-SEEK_STEP_FAST = 15
+VOLUME_STEP = 5
+VOLUME_MIN = 0
+VOLUME_MAX = 100
+VOLUME_FILE = Path("/opt/gamepup/saves/music-volume")
+# Named ALSA PCM. The DAC has no mixer, so loudness is this softvol control.
+SOFTVOL_PCM = "gamepup"
+SOFTVOL_CONTROL = "PCM"
 EVENT = struct.Struct("@llHHi")
 EV_KEY = 1
 EVIOCGRAB = 0x40044590
 FBIOGET_VSCREENINFO = 0x4600
 FBIOGET_FSCREENINFO = 0x4602
+
+# Resolved at runtime to a writable directory (service RuntimeDirectory or /tmp).
+MPV_SOCKET = Path("/tmp/gamepup-mpv-music.sock")
+MPV_LOG = Path("/tmp/gamepup-mpv-music.log")
 
 KEY_ESC = 1
 KEY_1 = 2
@@ -155,39 +165,53 @@ def read_fb_info(framebuffer):
 
 
 def present_canvas(framebuffer, canvas):
+    """Blit RGB888 canvas to fb0 as RGB565 (landscape) with a single pass."""
     info = read_fb_info(framebuffer)
     stride = info["stride"]
     height = info["height"]
     width = info["width"]
     bpp = info["bpp"]
-    frame = bytearray(stride * height)
+    if bpp != 16:
+        raise OSError(f"music player expects 16-bit fb, got {bpp}")
 
-    def put_pixel(dst_x, dst_y, color):
-        if bpp == 16:
-            red = (color >> 16) & 0xff
-            green = (color >> 8) & 0xff
-            blue = color & 0xff
-            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
-            offset = dst_y * stride + dst_x * 2
-            frame[offset:offset + 2] = int(value).to_bytes(2, "little")
-        else:
-            offset = dst_y * stride + dst_x * 4
-            frame[offset:offset + 4] = int(color).to_bytes(4, "little")
+    n = WIDTH * HEIGHT
+    pixels = array("H", [0]) * n
+    # Tight convert: canvas is 0x00RRGGBB
+    for i in range(n):
+        c = canvas[i]
+        pixels[i] = (
+            ((c >> 19) & 0x1F) << 11
+            | ((c >> 10) & 0x3F) << 5
+            | ((c >> 3) & 0x1F)
+        )
+    packed = pixels.tobytes()
 
     if width == WIDTH and height == HEIGHT:
-        src = memoryview(canvas)
+        if stride == WIDTH * 2:
+            os.pwrite(framebuffer, packed, 0)
+            return
+        frame = bytearray(stride * HEIGHT)
+        row = WIDTH * 2
         for y in range(HEIGHT):
-            for x in range(WIDTH):
-                put_pixel(x, y, int(src[y * WIDTH + x]))
-    else:
-        src = memoryview(canvas)
+            src = y * row
+            dst = y * stride
+            frame[dst:dst + row] = packed[src:src + row]
+        os.pwrite(framebuffer, frame, 0)
+        return
+
+    # Portrait fb: rotate 90° CW into destination.
+    if width == HEIGHT and height == WIDTH:
+        frame = bytearray(stride * height)
+        mv = memoryview(frame).cast("H")
         for y in range(HEIGHT):
+            row_base = y * WIDTH
             for x in range(WIDTH):
-                put_pixel(y, WIDTH - 1 - x, int(src[y * WIDTH + x]))
-    view = memoryview(frame)
-    written = 0
-    while written < len(frame):
-        written += os.pwrite(framebuffer, view[written:], written)
+                dst_x = y
+                dst_y = WIDTH - 1 - x
+                mv[dst_y * (stride // 2) + dst_x] = pixels[row_base + x]
+        os.pwrite(framebuffer, frame, 0)
+        return
+    raise OSError(f"Unsupported fb geometry {width}x{height}")
 
 
 def open_buttons():
@@ -208,27 +232,160 @@ def alsa_device():
     env = os.environ.get("GAMEPUP_ALSA_DEVICE", "").strip()
     if env:
         return env
+    card = alsa_card_id()
+    if card:
+        return f"plughw:{card},0"
+    return "default"
+
+
+def alsa_card_id() -> str:
+    env = os.environ.get("GAMEPUP_ALSA_CARD", "").strip()
+    if env:
+        return env
     try:
         listing = subprocess.check_output(
             ["aplay", "-l"], text=True, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.CalledProcessError):
-        return "default"
+        return ""
     for line in listing.splitlines():
         if re.search(r"GamePup|MAX98357|I2S", line, re.IGNORECASE):
-            match = re.search(r"card (\d+):", line)
+            match = re.search(r"card \d+: (\S+)", line)
             if match:
-                return f"plughw:{match.group(1)},0"
-    return "default"
+                return match.group(1)
+    return ""
+
+
+def softvol_slave(card: str) -> str:
+    env = os.environ.get("GAMEPUP_ALSA_DEVICE", "").strip()
+    if env.startswith("alsa/"):
+        env = env[5:]
+    if env and env not in ("default", SOFTVOL_PCM):
+        return env
+    return f"plughw:{card},0"
+
+
+def softvol_text(card: str) -> str:
+    slave = softvol_slave(card)
+    return (
+        f"pcm.{SOFTVOL_PCM} {{\n"
+        f"    type softvol\n"
+        f"    slave.pcm \"{slave}\"\n"
+        f"    control {{\n"
+        f"        name \"{SOFTVOL_CONTROL}\"\n"
+        f"        card \"{card}\"\n"
+        f"    }}\n"
+        f"    min_dB -51.0\n"
+        f"    max_dB 0.0\n"
+        f"    resolution 100\n"
+        f"}}\n"
+    )
+
+
+def alsa_pcm_listed(name: str) -> bool:
+    try:
+        listing = subprocess.check_output(
+            ["aplay", "-L"], text=True, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return any(line.strip() == name for line in listing.splitlines())
+
+
+def ensure_softvol(card: str) -> bool:
+    """Make pcm.gamepup visible. A copied player script can do this without reinstall."""
+    if not card:
+        return False
+    if alsa_pcm_listed(SOFTVOL_PCM):
+        return True
+    system = Path("/etc/alsa/conf.d/50-gamepup-softvol.conf")
+    user_rc = Path.home() / ".asoundrc"
+    try:
+        user_text = user_rc.read_text(encoding="utf-8") if user_rc.exists() else ""
+    except OSError:
+        user_text = ""
+    try:
+        system_text = system.read_text(encoding="utf-8") if system.exists() else ""
+    except OSError:
+        system_text = ""
+    marker = f"pcm.{SOFTVOL_PCM}"
+    if marker in system_text or marker in user_text:
+        print(f"{marker} is configured but aplay -L does not list it",
+              file=sys.stderr)
+        return False
+    try:
+        user_rc.write_text(
+            user_text.rstrip() + ("\n" if user_text.strip() else "") + softvol_text(card),
+            encoding="utf-8")
+    except OSError as error:
+        print(f"Cannot write {user_rc}: {error}", file=sys.stderr)
+        return False
+    ready = alsa_pcm_listed(SOFTVOL_PCM)
+    if ready:
+        print(f"ALSA softvol {marker} on card {card}", file=sys.stderr)
+    return ready
+
+
+def apply_mixer_volume(card: str, level: int) -> bool:
+    """Set the softvol control. This does not talk to mpv."""
+    if not card or not shutil_which("amixer"):
+        return False
+    try:
+        result = subprocess.run(
+            ["amixer", "-q", "-c", card, "sset", SOFTVOL_CONTROL, f"{int(level)}%"],
+            timeout=0.4,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def resolve_mpv_paths():
+    """Always use /tmp — /run/user/0 is missing under sudo and breaks IPC."""
+    uid = os.getuid()
+    return (
+        Path(f"/tmp/gamepup-mpv-{uid}.sock"),
+        Path(f"/tmp/gamepup-mpv-{uid}.log"),
+    )
 
 
 def ensure_music_root():
-    MUSIC_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        MUSIC_ROOT.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(
+            f"Cannot create {MUSIC_ROOT}: {error}. "
+            f"Run: sudo chown -R $(id -un) /opt/gamepup") from error
     readme = MUSIC_ROOT / "README.txt"
     if not readme.exists():
-        readme.write_text(
-            "Place music files here (mp3, ogg, flac, wav, m4a, aac, opus).\n"
-            "Subfolders are supported in the GamePup music player.\n",
-            encoding="utf-8")
+        try:
+            readme.write_text(
+                "Place music files here (mp3, ogg, flac, wav, m4a, aac, opus).\n"
+                "Subfolders are supported in the GamePup music player.\n",
+                encoding="utf-8")
+        except OSError:
+            pass
+
+
+def drain_keys(input_fd, settle_s=0.35):
+    """Drop leftover A/B presses from the parent menu so we do not exit/play immediately."""
+    deadline = time.monotonic() + settle_s
+    while time.monotonic() < deadline:
+        readable, _, _ = select.select([input_fd], [], [], 0.05)
+        if not readable:
+            continue
+        try:
+            os.read(input_fd, EVENT.size * 64)
+        except OSError:
+            break
+
+
+def draw_message(framebuffer, title, line1, line2=""):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    draw_chrome(canvas, title, line1[:48])
+    if line2:
+        draw_text(canvas, 8, 48, line2[:48], WHITE)
+    present_canvas(framebuffer, canvas)
 
 
 def is_audio(path: Path) -> bool:
@@ -283,26 +440,28 @@ def wait_key(input_fd, timeout=0.1):
     return pressed
 
 
-def drain_keys(input_fd):
-    while True:
-        readable, _, _ = select.select([input_fd], [], [], 0)
-        if not readable:
-            return
-        try:
-            os.read(input_fd, EVENT.size * 64)
-        except OSError:
-            return
-
-
 class MpvPlayer:
-    def __init__(self, device: str):
+    def __init__(self, device: str, card: str, softvol: bool):
         self.device = device
+        self.card = card
+        self.softvol = softvol
         self.process = None
         self.playlist = []
         self.index = -1
+        self.last_error = ""
+        self.level = load_saved_volume()
+        # A new softvol control already sits at 0 dB, which is level 100.
+        self.volume_applied = self.level == VOLUME_MAX
+        self.last_volume_push = 0.0
+        self.playing = False
+        self.paused = False
+        self.position = 0
+        self.duration = 0
+        self.ipc_after = 0.0
 
     def _socket_path(self) -> Path:
-        MPV_SOCKET.parent.mkdir(parents=True, exist_ok=True)
+        global MPV_SOCKET, MPV_LOG
+        MPV_SOCKET, MPV_LOG = resolve_mpv_paths()
         if MPV_SOCKET.exists():
             try:
                 MPV_SOCKET.unlink()
@@ -310,40 +469,81 @@ class MpvPlayer:
                 pass
         return MPV_SOCKET
 
+    def _audio_device_candidates(self):
+        # softvol first when that PCM exists. The remaining names are the
+        # pre-volume order, so playback still has a device if softvol is absent.
+        raw = self.device.strip() or "default"
+        if raw.startswith("alsa/"):
+            raw = raw[5:]
+        if raw == SOFTVOL_PCM:
+            raw = softvol_slave(self.card)
+        ordered = []
+        if self.softvol:
+            ordered.append(f"alsa/{SOFTVOL_PCM}")
+        ordered.extend((raw, f"alsa/{raw}", "alsa/default", "default"))
+        candidates = []
+        for value in ordered:
+            if value and value not in candidates:
+                candidates.append(value)
+        return candidates
+
     def start(self):
+        """Start idle mpv on the first audio device that opens a control socket."""
         if self.process and self.process.poll() is None:
             return
-        socket_path = self._socket_path()
-        audio_device = self.device
-        if not audio_device.startswith("alsa/"):
-            audio_device = f"alsa/{audio_device}"
-        command = [
-            "mpv",
-            "--idle=yes",
-            "--no-video",
-            "--force-window=no",
-            "--really-quiet",
-            "--no-terminal",
-            "--no-input-default-bindings",
-            "--keep-open=no",
-            f"--ao=alsa",
-            f"--audio-device={audio_device}",
-            f"--input-ipc-server={socket_path}",
-        ]
-        try:
-            self.process = subprocess.Popen(
-                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as error:
-            raise RuntimeError(f"mpv unavailable: {error}") from error
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if socket_path.exists():
-                return
-            if self.process.poll() is not None:
-                break
-            time.sleep(0.05)
-        self.stop()
-        raise RuntimeError("mpv IPC socket did not appear")
+        if not shutil_which("mpv"):
+            raise RuntimeError("mpv binary not found in PATH")
+
+        errors = []
+        for audio_device in self._audio_device_candidates():
+            socket_path = self._socket_path()
+            command = [
+                "mpv",
+                "--no-config",
+                "--idle=yes",
+                "--vo=null",
+                "--no-video",
+                "--force-window=no",
+                "--really-quiet",
+                "--no-terminal",
+                "--no-input-default-bindings",
+                "--keep-open=no",
+                "--ao=alsa",
+                f"--audio-device={audio_device}",
+                f"--input-ipc-server={socket_path}",
+            ]
+            try:
+                with open(MPV_LOG, "wb") as log_file:
+                    self.process = subprocess.Popen(
+                        command, stdout=subprocess.DEVNULL, stderr=log_file)
+            except OSError as error:
+                raise RuntimeError(f"mpv unavailable: {error}") from error
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if socket_path.exists():
+                    self.device = audio_device.removeprefix("alsa/")
+                    self.last_error = ""
+                    print(f"mpv ready ao={audio_device} ipc={socket_path}",
+                          file=sys.stderr)
+                    return
+                if self.process.poll() is not None:
+                    break
+                time.sleep(0.05)
+
+            detail = ""
+            try:
+                detail = MPV_LOG.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                pass
+            rc = self.process.poll() if self.process else None
+            self.stop()
+            errors.append(
+                f"audio-device={audio_device} rc={rc}"
+                + (f": {detail[-240:]}" if detail else ""))
+
+        self.last_error = " | ".join(errors) if errors else "unknown"
+        raise RuntimeError("mpv IPC socket did not appear. " + self.last_error)
 
     def stop(self):
         if self.process and self.process.poll() is None:
@@ -356,15 +556,18 @@ class MpvPlayer:
         self.process = None
         self.playlist = []
         self.index = -1
+        self.playing = False
+        self.paused = False
         try:
             MPV_SOCKET.unlink(missing_ok=True)
         except OSError:
             pass
 
     def _rpc(self, command, timeout=0.4):
+        """One mpv command on its own socket, same as the pre-volume player."""
         if not MPV_SOCKET.exists():
             return None
-        payload = (json.dumps({"command": command}) + "\n").encode("utf-8")
+        payload = (json.dumps({"command": list(command)}) + "\n").encode("utf-8")
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(timeout)
@@ -391,11 +594,11 @@ class MpvPlayer:
         except json.JSONDecodeError:
             return None
 
-    def command(self, *args):
-        return self._rpc(list(args))
+    def command(self, *args, timeout=0.4):
+        return self._rpc(args, timeout=timeout)
 
     def get_property(self, name):
-        response = self.command("get_property", name)
+        response = self.command("get_property", name, timeout=0.15)
         if not response or response.get("error") not in (None, "success"):
             return None
         return response.get("data")
@@ -406,21 +609,60 @@ class MpvPlayer:
     def play_list(self, tracks: list[Path], start_index: int = 0):
         if not tracks:
             return False
-        self.start()
+        if not self.active():
+            self.start()
         self.playlist = list(tracks)
         self.index = max(0, min(start_index, len(tracks) - 1))
+        self.playing = True
+        self.paused = False
+        self.position = 0
+        self.duration = 0
+        # Same commands as before volume control. Gain stays at mpv's default.
         self.command("loadfile", str(self.playlist[0]), "replace")
         for track in self.playlist[1:]:
             self.command("loadfile", str(track), "append")
         self.command("playlist-play-index", self.index)
         self.command("set_property", "pause", False)
+        # Leave the core thread alone while ALSA opens the DAC.
+        self.ipc_after = time.monotonic() + 5.0
+        print(f"play {self.playlist[self.index]}", file=sys.stderr)
         return True
 
     def toggle_pause(self):
         self.command("cycle", "pause")
+        self.paused = not self.paused
 
     def seek(self, seconds: int):
         self.command("seek", seconds, "relative")
+
+    def set_volume(self, level: int):
+        level = max(VOLUME_MIN, min(VOLUME_MAX, int(level)))
+        self.level = level
+        # Mixer only. mpv's volume property stalls the ALSA open on this DAC.
+        # Defer the mixer write until that open has had time to finish.
+        if time.monotonic() >= self.ipc_after:
+            self.volume_applied = apply_mixer_volume(self.card, level)
+        else:
+            self.volume_applied = False
+        self.last_volume_push = time.monotonic()
+        try:
+            VOLUME_FILE.parent.mkdir(parents=True, exist_ok=True)
+            VOLUME_FILE.write_text(f"{level}\n", encoding="utf-8")
+        except OSError:
+            pass
+        return level
+
+    def push_volume(self):
+        if self.volume_applied or not self.playlist:
+            return
+        now = time.monotonic()
+        if now < self.ipc_after or now - self.last_volume_push < 1.0:
+            return
+        self.last_volume_push = now
+        self.volume_applied = apply_mixer_volume(self.card, self.level)
+
+    def adjust_volume(self, delta: int):
+        return self.set_volume(self.level + delta)
 
     def next_track(self):
         if not self.playlist:
@@ -448,35 +690,57 @@ class MpvPlayer:
         self.command("stop")
         self.playlist = []
         self.index = -1
+        self.playing = False
+        self.paused = False
+
+    def screen_info(self):
+        path = self.playlist[self.index] if 0 <= self.index < len(self.playlist) else None
+        return {
+            "playing": self.playing,
+            "paused": self.paused,
+            "position": self.position,
+            "duration": self.duration,
+            "path": path,
+            "index": self.index,
+            "count": len(self.playlist),
+            "volume": self.level,
+        }
+
+    def status(self):
+        if time.monotonic() < self.ipc_after:
+            return self.screen_info()
+        if not self.active() or not self.playlist:
+            self.playing = False
+            self.paused = False
+            self.position = 0
+            self.duration = 0
+            return self.screen_info()
+        self.sync_index()
+        position = self.get_property("time-pos")
+        duration = self.get_property("duration")
+        paused = self.get_property("pause")
+        idle = self.get_property("idle-active")
+        if isinstance(position, (int, float)):
+            self.position = position
+        if isinstance(duration, (int, float)):
+            self.duration = duration
+        playing = idle is not True
+        self.playing = playing
+        self.paused = bool(paused) if playing else False
+        return self.screen_info()
 
     def sync_index(self):
         value = self.get_property("playlist-pos")
         if isinstance(value, int) and 0 <= value < len(self.playlist):
             self.index = value
 
-    def status(self):
-        self.sync_index()
-        paused = bool(self.get_property("pause"))
-        position = self.get_property("time-pos")
-        duration = self.get_property("duration")
-        path = None
-        if 0 <= self.index < len(self.playlist):
-            path = self.playlist[self.index]
-        else:
-            media = self.get_property("path")
-            if isinstance(media, str):
-                path = Path(media)
-        idle = self.get_property("idle-active")
-        playing = self.active() and not idle and path is not None
-        return {
-            "playing": playing,
-            "paused": paused if playing else False,
-            "position": position if isinstance(position, (int, float)) else 0,
-            "duration": duration if isinstance(duration, (int, float)) else 0,
-            "path": path,
-            "index": self.index,
-            "count": len(self.playlist),
-        }
+
+def load_saved_volume() -> int:
+    try:
+        value = int(VOLUME_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 100
+    return max(VOLUME_MIN, min(VOLUME_MAX, value))
 
 
 def draw_chrome(canvas, title, footer):
@@ -491,7 +755,7 @@ def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlay
                  status_text: str):
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     rel = "." if cwd == MUSIC_ROOT else str(cwd.relative_to(MUSIC_ROOT))
-    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:PREV/NEXT B:BACK")
+    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:TRK START+/SEL-:VOL")
     draw_text(canvas, 8, 34, f"/{rel}"[:48], CYAN)
 
     rows = []
@@ -520,22 +784,22 @@ def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlay
     if info["playing"] and info["path"] is not None:
         state = "PAUSE" if info["paused"] else "PLAY"
         draw_text(canvas, 8, 202,
-                  f"{state} {info['path'].stem[:28]}"[:48], GREEN)
+                  f"{state} {info['path'].stem[:22]} VOL{info['volume']:3d}"[:48],
+                  GREEN)
         draw_text(canvas, 8, 216,
                   f"{format_time(info['position'])}/{format_time(info['duration'])} "
-                  f"{info['index'] + 1}/{info['count']}", GRAY)
+                  f"{info['index'] + 1}/{info['count']}  B:BACK", GRAY)
         if info["duration"] > 0:
             width = int((WIDTH - 16) * min(1.0, info["position"] / info["duration"]))
             fill_rect(canvas, 8, 230, max(1, width), 4, GREEN)
     else:
         draw_text(canvas, 8, 202, status_text[:48], GRAY)
-        draw_text(canvas, 8, 216, "LT/RT SEEK  SEL STOP  A PLAY/PAUSE", GRAY)
+        draw_text(canvas, 8, 216, "A PLAY  START/SEL VOL  LT/RT SEEK", GRAY)
     present_canvas(framebuffer, canvas)
     return rows, selected
 
 
-def draw_now_playing(framebuffer, player: MpvPlayer):
-    info = player.status()
+def draw_now_playing(framebuffer, info):
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     draw_chrome(canvas, "NOW PLAYING", "A:PAUSE Y/X:TRK LT/RT:SEEK")
     path = info["path"]
@@ -550,46 +814,85 @@ def draw_now_playing(framebuffer, player: MpvPlayer):
               WHITE)
     draw_text(canvas, 16, 144, f"TRACK {info['index'] + 1} / {max(1, info['count'])}",
               GRAY)
+    vol = info["volume"]
+    draw_text(canvas, 16, 160, f"VOLUME {vol:3d}", CYAN)
+    fill_rect(canvas, 16, 174, WIDTH - 32, 8, DARK_GREEN)
+    fill_rect(canvas, 16, 174,
+              max(1, int((WIDTH - 32) * (vol / VOLUME_MAX))), 8, GREEN)
     if info["duration"] > 0:
-        fill_rect(canvas, 16, 170, WIDTH - 32, 10, DARK_GREEN)
+        fill_rect(canvas, 16, 188, WIDTH - 32, 4, DARK_GREEN)
         width = int((WIDTH - 32) * min(1.0, info["position"] / info["duration"]))
-        fill_rect(canvas, 16, 170, max(1, width), 10, GREEN)
-    draw_text(canvas, 8, 200, "B:LIBRARY  SEL:STOP", GRAY)
-    draw_text(canvas, 8, 216, "UP/DN: SEEK +/-15S", GRAY)
+        fill_rect(canvas, 16, 188, max(1, width), 4, YELLOW)
+    draw_text(canvas, 8, 206, "B:LIBRARY  SEL:STOP", GRAY)
+    draw_text(canvas, 8, 220, "UP/DN: VOLUME +/-", GRAY)
     present_canvas(framebuffer, canvas)
 
 
 def run():
-    ensure_music_root()
-    device = alsa_device()
-    print(f"Music player ALSA device: {device}", file=sys.stderr)
-    player = MpvPlayer(device)
     try:
-        player.start()
+        ensure_music_root()
     except RuntimeError as error:
         print(error, file=sys.stderr)
-        print("Install mpv (alsa-utils recommended).", file=sys.stderr)
         return 1
 
+    card = alsa_card_id()
+    device = alsa_device()
+    softvol = ensure_softvol(card)
+    print(f"Music player card {card} device {device} softvol={softvol}",
+          file=sys.stderr)
+    global MPV_SOCKET, MPV_LOG
+    MPV_SOCKET, MPV_LOG = resolve_mpv_paths()
+    print(f"mpv IPC path: {MPV_SOCKET}", file=sys.stderr)
+
+    if not shutil_which("mpv"):
+        print("mpv not found in PATH. Install: sudo apt-get install -y mpv",
+              file=sys.stderr)
+        return 1
+
+    player = MpvPlayer(device, card, softvol)
     framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-    input_fd = open_buttons()
+    input_fd = -1
     cwd = MUSIC_ROOT
     selected = 0
     mode = "browser"
     status = f"DEV {device}"[:48]
+    need_redraw = True
+    last_now_draw = 0.0
+    last_browser_draw = 0.0
 
     try:
+        input_fd = open_buttons()
+        # Paint the library before mpv starts. Volume used to be applied with
+        # a blocking IPC call here, which held the screen blank.
+        entries = list_entries(cwd)
+        rows, selected = draw_browser(
+            framebuffer, cwd, entries, selected, player, status)
+        need_redraw = False
+        drain_keys(input_fd, settle_s=0.35)
+
         while running:
             if mode == "now":
+                if not player.active():
+                    mode = "browser"
+                    status = "MPV EXITED"
+                    need_redraw = True
+                    continue
+                now = time.monotonic()
+                player.push_volume()
                 info = player.status()
                 if not info["playing"]:
                     mode = "browser"
                     status = "PLAYBACK ENDED"
+                    need_redraw = True
                     continue
-                draw_now_playing(framebuffer, player)
-                code = wait_key(input_fd, 0.15)
+                if need_redraw or now - last_now_draw >= 0.35:
+                    draw_now_playing(framebuffer, info)
+                    last_now_draw = now
+                    need_redraw = False
+                code = wait_key(input_fd, 0.12)
                 if code is None:
                     continue
+                need_redraw = True
                 if code in (KEY_TAB, KEY_1):
                     player.toggle_pause()
                 elif code == KEY_5:
@@ -601,9 +904,9 @@ def run():
                 elif code == KEY_RIGHT:
                     player.seek(SEEK_STEP)
                 elif code == KEY_UP:
-                    player.seek(-SEEK_STEP_FAST)
+                    player.adjust_volume(VOLUME_STEP)
                 elif code == KEY_DOWN:
-                    player.seek(SEEK_STEP_FAST)
+                    player.adjust_volume(-VOLUME_STEP)
                 elif code == KEY_P:
                     player.prev_track()
                 elif code == KEY_ESC:
@@ -613,39 +916,66 @@ def run():
                     status = "PLAYING IN BACKGROUND"
                 continue
 
-            entries = list_entries(cwd)
-            rows, selected = draw_browser(
-                framebuffer, cwd, entries, selected, player, status)
+            if need_redraw:
+                entries = list_entries(cwd)
+                rows, selected = draw_browser(
+                    framebuffer, cwd, entries, selected, player, status)
+            else:
+                entries = list_entries(cwd)
+                rows = []
+                if cwd != MUSIC_ROOT:
+                    rows.append(("..", None))
+                for entry in entries:
+                    rows.append((relative_label(entry, cwd), entry))
+                if not rows:
+                    rows.append(("(EMPTY FOLDER)", None))
+                selected = max(0, min(selected, len(rows) - 1))
+
             code = wait_key(input_fd, 0.2)
             if code is None:
+                player.push_volume()
+                if player.playing and time.monotonic() - last_browser_draw >= 0.5:
+                    need_redraw = True
+                    last_browser_draw = time.monotonic()
                 continue
+            need_redraw = True
             if code == KEY_UP:
                 selected = (selected - 1) % len(rows)
             elif code == KEY_DOWN:
                 selected = (selected + 1) % len(rows)
             elif code == KEY_LEFT:
-                if player.status()["playing"]:
+                if player.playing:
                     player.seek(-SEEK_STEP)
                 elif cwd != MUSIC_ROOT:
                     cwd = cwd.parent
                     selected = 0
             elif code == KEY_RIGHT:
-                if player.status()["playing"]:
+                if player.playing:
                     player.seek(SEEK_STEP)
             elif code == KEY_P:
-                player.prev_track()
+                if player.active():
+                    player.prev_track()
             elif code == KEY_ESC:
-                player.next_track()
+                if player.active():
+                    player.next_track()
+            elif code == KEY_1:
+                if player.active():
+                    level = player.adjust_volume(VOLUME_STEP)
+                    status = f"VOL {level}"
             elif code == KEY_5:
-                if player.status()["playing"]:
+                if not player.playing:
+                    continue
+                if player.level <= VOLUME_MIN:
                     player.stop_playback()
                     status = "STOPPED"
+                else:
+                    status = f"VOL {player.adjust_volume(-VOLUME_STEP)}"
             elif code == KEY_ENTER:
                 if cwd == MUSIC_ROOT:
                     break
                 cwd = cwd.parent
                 selected = 0
-            elif code in (KEY_TAB, KEY_1):
+            elif code == KEY_TAB:
                 label, path = rows[selected]
                 if label == "..":
                     if cwd != MUSIC_ROOT:
@@ -665,17 +995,25 @@ def run():
                     except ValueError:
                         tracks = [path]
                         index = 0
-                    if player.play_list(tracks, index):
-                        mode = "now"
-                        status = f"PLAY {path.name}"[:48]
-                    else:
-                        status = "PLAY FAILED"
+                    try:
+                        if player.play_list(tracks, index):
+                            mode = "now"
+                            status = f"PLAY {path.name}"[:48]
+                            last_now_draw = 0.0
+                            need_redraw = True
+                            drain_keys(input_fd, settle_s=0.05)
+                        else:
+                            status = "PLAY FAILED"
+                    except RuntimeError as error:
+                        print(error, file=sys.stderr)
+                        status = "MPV FAIL"[:48]
     finally:
         player.stop()
-        try:
-            os.close(input_fd)
-        except OSError:
-            pass
+        if input_fd >= 0:
+            try:
+                os.close(input_fd)
+            except OSError:
+                pass
         try:
             os.close(framebuffer)
         except OSError:
