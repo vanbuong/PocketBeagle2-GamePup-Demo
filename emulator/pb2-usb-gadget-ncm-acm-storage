@@ -5,11 +5,14 @@
 set -eu
 
 G=/sys/kernel/config/usb_gadget/pb2
+GADGET_ROOT=/sys/kernel/config/usb_gadget
 CONFIG=c.1
 IDENTITY_DIR=/var/lib/pb2-usb-gadget
 IDENTITY_FILE=$IDENTITY_DIR/identity
 FALLBACK_SERIAL=PB2GAMEPUP0001
 ROM_IMAGE=${GAMEPUP_ROM_IMAGE:-/var/lib/gamepup-rom-drive/gamepup-roms.img}
+UDC_BIND_RETRIES=${GAMEPUP_UDC_BIND_RETRIES:-8}
+UDC_BIND_DELAY_MS=${GAMEPUP_UDC_BIND_DELAY_MS:-250}
 
 read_dt_serial() {
 	if [ -r /proc/device-tree/serial-number ]; then
@@ -65,26 +68,99 @@ first_udc() {
 	return 1
 }
 
-cleanup_configfs() {
-	if [ -d "$G" ]; then
-		[ ! -f "$G/UDC" ] || printf '\n' > "$G/UDC" 2>/dev/null || true
-		find "$G/configs" -type l -exec rm -f {} + 2>/dev/null || true
-		find "$G/os_desc" -type l -exec rm -f {} + 2>/dev/null || true
-		find "$G/functions" -mindepth 1 -maxdepth 1 -type d \
-			-exec rmdir {} + 2>/dev/null || true
-		find "$G/configs" -mindepth 1 -type d -depth \
-			-exec rmdir {} + 2>/dev/null || true
-		find "$G/strings" -mindepth 1 -type d -depth \
-			-exec rmdir {} + 2>/dev/null || true
-		rmdir "$G" 2>/dev/null || true
+cleanup_one_gadget() {
+	gadget=$1
+	[ -d "$gadget" ] || return 0
+	[ ! -f "$gadget/UDC" ] || printf '\n' > "$gadget/UDC" 2>/dev/null || true
+	find "$gadget/configs" -type l -exec rm -f {} + 2>/dev/null || true
+	find "$gadget/os_desc" -type l -exec rm -f {} + 2>/dev/null || true
+	find "$gadget/functions" -mindepth 1 -maxdepth 1 -type d \
+		-exec rmdir {} + 2>/dev/null || true
+	find "$gadget/configs" -mindepth 1 -type d -depth \
+		-exec rmdir {} + 2>/dev/null || true
+	find "$gadget/strings" -mindepth 1 -type d -depth \
+		-exec rmdir {} + 2>/dev/null || true
+	rmdir "$gadget" 2>/dev/null || true
+}
+
+# Stock bb-usb-gadgets / usb-gadget leave other configfs trees that keep the
+# UDC busy. Tear every gadget down before (re)creating pb2.
+cleanup_all_gadgets() {
+	[ -d "$GADGET_ROOT" ] || return 0
+	for gadget in "$GADGET_ROOT"/*; do
+		[ -d "$gadget" ] || continue
+		cleanup_one_gadget "$gadget"
+	done
+}
+
+# Unbind UDC from any gadget without deleting trees (for bind retries).
+unbind_udc_everywhere() {
+	want=$1
+	[ -d "$GADGET_ROOT" ] || return 0
+	for gadget in "$GADGET_ROOT"/*; do
+		[ -f "$gadget/UDC" ] || continue
+		bound=$(tr -d ' \n\r\t' < "$gadget/UDC" 2>/dev/null || true)
+		if [ -z "$bound" ] || [ "$bound" = "$want" ]; then
+			printf '\n' > "$gadget/UDC" 2>/dev/null || true
+		fi
+	done
+}
+
+sleep_ms() {
+	ms=$1
+	if command -v python3 >/dev/null 2>&1; then
+		python3 -c "import time; time.sleep($ms / 1000.0)" 2>/dev/null && return 0
 	fi
+	sec=$(( (ms + 999) / 1000 ))
+	[ "$sec" -ge 1 ] || sec=1
+	sleep "$sec"
+}
+
+dump_gadget_state() {
+	echo "ROM image: $ROM_IMAGE ($(wc -c < "$ROM_IMAGE" 2>/dev/null || echo '?') bytes)" >&2
+	echo "UDC class:" >&2
+	ls -la /sys/class/udc 2>&1 || true
+	echo "configfs gadgets:" >&2
+	if [ -d "$GADGET_ROOT" ]; then
+		for gadget in "$GADGET_ROOT"/*; do
+			[ -d "$gadget" ] || continue
+			printf '  %s UDC=%s\n' "$(basename "$gadget")" \
+				"$(tr -d '\n' < "$gadget/UDC" 2>/dev/null || true)" >&2
+			ls -la "$gadget/functions" "$gadget/configs" 2>&1 || true
+		done
+	fi
+	dmesg 2>/dev/null | tail -n 40 >&2 || true
+}
+
+bind_udc() {
+	udc=$1
+	errfile=$(mktemp)
+	attempt=1
+	while [ "$attempt" -le "$UDC_BIND_RETRIES" ]; do
+		unbind_udc_everywhere "$udc"
+		if printf '%s\n' "$udc" > "$G/UDC" 2>"$errfile"; then
+			bound=$(tr -d ' \n\r\t' < "$G/UDC" 2>/dev/null || true)
+			if [ "$bound" = "$udc" ]; then
+				rm -f "$errfile"
+				return 0
+			fi
+			echo "UDC bind wrote ok but readback is '$bound' (want $udc)" >&2
+		else
+			err=$(tr -d '\n' < "$errfile" 2>/dev/null || true)
+			echo "UDC bind attempt $attempt/$UDC_BIND_RETRIES failed for $udc: ${err:-unknown error}" >&2
+		fi
+		printf '\n' > "$G/UDC" 2>/dev/null || true
+		sleep_ms "$UDC_BIND_DELAY_MS"
+		attempt=$((attempt + 1))
+	done
+	rm -f "$errfile"
+	return 1
 }
 
 case "${1:-start}" in
 	stop)
-		[ ! -d "$G" ] || printf '\n' > "$G/UDC" 2>/dev/null || true
 		ip link set usb0 down 2>/dev/null || true
-		cleanup_configfs
+		cleanup_all_gadgets
 		exit 0
 		;;
 	start | restart) ;;
@@ -96,6 +172,10 @@ esac
 
 [ -f "$ROM_IMAGE" ] || {
 	echo "ROM drive image is missing: $ROM_IMAGE" >&2
+	exit 1
+}
+[ -s "$ROM_IMAGE" ] || {
+	echo "ROM drive image is empty: $ROM_IMAGE" >&2
 	exit 1
 }
 
@@ -111,15 +191,21 @@ if [ -d /sys/module/g_cdc ] || [ -d /sys/module/g_ether ] || \
 	exit 1
 fi
 
-cleanup_configfs
+# Belt-and-suspenders: unit Conflicts= should already stop these.
+systemctl stop bb-usb-gadgets.service usb-gadget.service \
+	gadget-init.service 2>/dev/null || true
+
+cleanup_all_gadgets
 UDC=$(first_udc) || {
 	echo "no USB device controller found under /sys/class/udc" >&2
+	dump_gadget_state
 	exit 1
 }
 [ -n "$UDC" ] || {
 	echo "USB device controller name is empty" >&2
 	exit 1
 }
+
 USB_SERIAL=$(usb_serial)
 DEV_MAC=$(derive_mac 02 pb2-dev)
 HOST_MAC=$(derive_mac 06 pb2-host)
@@ -160,8 +246,15 @@ printf 'GamePup ROM Inbox\n' \
 	> functions/mass_storage.roms/lun.0/inquiry_string
 printf '%s\n' "$ROM_IMAGE" > functions/mass_storage.roms/lun.0/file
 
-ln -s functions/ncm.usb0 configs/$CONFIG/ncm.usb0
-ln -s functions/acm.usb0 configs/$CONFIG/acm.usb0
-ln -s functions/mass_storage.roms configs/$CONFIG/mass_storage.roms
-printf '%s\n' "$UDC" > UDC
+ln -sfn functions/ncm.usb0 configs/$CONFIG/ncm.usb0
+ln -sfn functions/acm.usb0 configs/$CONFIG/acm.usb0
+ln -sfn functions/mass_storage.roms configs/$CONFIG/mass_storage.roms
+
+if ! bind_udc "$UDC"; then
+	echo "failed to bind UDC $UDC" >&2
+	dump_gadget_state
+	exit 1
+fi
+
 ip link set usb0 up 2>/dev/null || true
+echo "pb2 USB gadget bound to $UDC (NCM + ACM + mass_storage)"

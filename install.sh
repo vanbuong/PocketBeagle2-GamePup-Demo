@@ -162,6 +162,12 @@ if id "$DEVICE_USER" >/dev/null 2>&1; then
 fi
 /usr/local/libexec/gamepup-rom-drive-setup
 systemctl daemon-reload
+# Stock BeagleBoard NCM-only gadgets claim the USB device controller; GamePup
+# needs the same UDC for NCM + ACM + the GAMEPUP mass-storage inbox.
+for _gadget_unit in bb-usb-gadgets.service usb-gadget.service gadget-init.service; do
+	systemctl disable --now "$_gadget_unit" 2>/dev/null || true
+	systemctl mask "$_gadget_unit" 2>/dev/null || true
+done
 systemctl enable --now pb2-usb-gadget.service
 systemctl enable gamepup-oled-status.service
 systemctl enable --now gamepup-rom-import-watch.service
