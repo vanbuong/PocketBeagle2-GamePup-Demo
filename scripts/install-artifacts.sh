@@ -73,11 +73,9 @@ install -m 0644 /usr/share/games/doom/doom1.wad \
 	"/opt/gamepup/games/doom/Doom Shareware.wad"
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then
-	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
-		/opt/gamepup/games /opt/gamepup/voice-memos /opt/gamepup/music \
-		2>/dev/null || true
-	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/games/doom \
-		"/opt/gamepup/games/doom/Doom Shareware.wad"
+	install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 /opt/gamepup
+	touch /opt/gamepup/selected-rom
+	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup 2>/dev/null || true
 fi
 
 echo "Installed userspace artifacts from $DIST_DIR:"

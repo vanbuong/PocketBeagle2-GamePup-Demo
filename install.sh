@@ -237,9 +237,13 @@ sed -e "s/^User=beagle$/User=$DEVICE_USER/" \
 chmod 0644 /etc/systemd/system/gamepup-game.service
 visudo -cf /etc/sudoers.d/gamepup-rom-import
 install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 \
-	/opt/gamepup/games/nes /opt/gamepup/games/gbc \
-	/opt/gamepup/games/n64 /opt/gamepup/games/doom
-chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/saves /opt/gamepup/gifs
+	/opt/gamepup /opt/gamepup/games/nes /opt/gamepup/games/gbc \
+	/opt/gamepup/games/n64 /opt/gamepup/games/doom \
+	/opt/gamepup/saves /opt/gamepup/gifs \
+	/opt/gamepup/voice-memos /opt/gamepup/music
+# Menu writes /opt/gamepup/selected-rom as the service user.
+touch /opt/gamepup/selected-rom
+chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup
 usermod -a -G video,render,input,spi,i2c "$DEVICE_USER" 2>/dev/null || \
 	usermod -a -G video,input,spi,i2c "$DEVICE_USER" 2>/dev/null || true
 /usr/local/libexec/gamepup-rom-drive-setup
