@@ -526,13 +526,15 @@ through the MAX98357 (mpv → ALSA). Subfolders are supported. Copy
 
 | Control | Library | Now playing |
 |---|---|---|
-| Up / Down | Move selection | Seek −15s / +15s |
-| A / Start | Open folder or play file | Pause / resume |
+| Up / Down | Move selection | Volume − / + (steps of 5) |
+| A | Open folder or play file | Pause / resume |
+| Start | Volume + (while playing) | Pause / resume |
 | B | Parent folder / exit | Back to library (keeps playing) |
 | Left / Right | Parent (Left) / seek if playing | Seek −5s / +5s |
 | Y / X | Previous / next track | Previous / next track |
-| Select | Stop | Stop |
+| Select | Volume − (stop at 0) | Stop |
 
+Volume is mpv software gain (0–100), persisted in `/opt/gamepup/saves/music-volume`.
 Requires `mpv`. Override the ALSA device with `GAMEPUP_ALSA_DEVICE` if needed.
 
 ## Hardware tester

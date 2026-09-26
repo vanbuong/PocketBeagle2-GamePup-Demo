@@ -27,7 +27,10 @@ MUSIC_ROOT = Path("/opt/gamepup/music")
 MPV_SOCKET = Path("/run/gamepup/mpv-music.sock")
 AUDIO_EXTENSIONS = {".mp3", ".ogg", ".flac", ".wav", ".m4a", ".aac", ".opus", ".wma"}
 SEEK_STEP = 5
-SEEK_STEP_FAST = 15
+VOLUME_STEP = 5
+VOLUME_MIN = 0
+VOLUME_MAX = 100
+VOLUME_FILE = Path("/opt/gamepup/saves/music-volume")
 EVENT = struct.Struct("@llHHi")
 EV_KEY = 1
 EVIOCGRAB = 0x40044590
@@ -447,6 +450,7 @@ class MpvPlayer:
         for track in self.playlist[1:]:
             self.command("loadfile", str(track), "append")
         self.command("playlist-play-index", self.index)
+        self.command("set_property", "volume", load_saved_volume())
         self.command("set_property", "pause", False)
         return True
 
@@ -455,6 +459,28 @@ class MpvPlayer:
 
     def seek(self, seconds: int):
         self.command("seek", seconds, "relative")
+
+    def volume(self):
+        value = self.get_property("volume")
+        if isinstance(value, (int, float)):
+            return int(round(value))
+        return None
+
+    def set_volume(self, level: int):
+        level = max(VOLUME_MIN, min(VOLUME_MAX, int(level)))
+        self.command("set_property", "volume", level)
+        try:
+            VOLUME_FILE.parent.mkdir(parents=True, exist_ok=True)
+            VOLUME_FILE.write_text(f"{level}\n", encoding="utf-8")
+        except OSError:
+            pass
+        return level
+
+    def adjust_volume(self, delta: int):
+        current = self.volume()
+        if current is None:
+            current = load_saved_volume()
+        return self.set_volume(current + delta)
 
     def next_track(self):
         if not self.playlist:
@@ -502,6 +528,7 @@ class MpvPlayer:
                 path = Path(media)
         idle = self.get_property("idle-active")
         playing = self.active() and not idle and path is not None
+        vol = self.volume()
         return {
             "playing": playing,
             "paused": paused if playing else False,
@@ -510,7 +537,16 @@ class MpvPlayer:
             "path": path,
             "index": self.index,
             "count": len(self.playlist),
+            "volume": vol if vol is not None else load_saved_volume(),
         }
+
+
+def load_saved_volume() -> int:
+    try:
+        value = int(VOLUME_FILE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 80
+    return max(VOLUME_MIN, min(VOLUME_MAX, value))
 
 
 def draw_chrome(canvas, title, footer):
@@ -525,7 +561,7 @@ def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlay
                  status_text: str):
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     rel = "." if cwd == MUSIC_ROOT else str(cwd.relative_to(MUSIC_ROOT))
-    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:PREV/NEXT B:BACK")
+    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:TRK START/SEL:VOL")
     draw_text(canvas, 8, 34, f"/{rel}"[:48], CYAN)
 
     rows = []
@@ -554,16 +590,17 @@ def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlay
     if info["playing"] and info["path"] is not None:
         state = "PAUSE" if info["paused"] else "PLAY"
         draw_text(canvas, 8, 202,
-                  f"{state} {info['path'].stem[:28]}"[:48], GREEN)
+                  f"{state} {info['path'].stem[:22]} VOL{info['volume']:3d}"[:48],
+                  GREEN)
         draw_text(canvas, 8, 216,
                   f"{format_time(info['position'])}/{format_time(info['duration'])} "
-                  f"{info['index'] + 1}/{info['count']}", GRAY)
+                  f"{info['index'] + 1}/{info['count']}  B:BACK", GRAY)
         if info["duration"] > 0:
             width = int((WIDTH - 16) * min(1.0, info["position"] / info["duration"]))
             fill_rect(canvas, 8, 230, max(1, width), 4, GREEN)
     else:
         draw_text(canvas, 8, 202, status_text[:48], GRAY)
-        draw_text(canvas, 8, 216, "LT/RT SEEK  SEL STOP  A PLAY/PAUSE", GRAY)
+        draw_text(canvas, 8, 216, "LT/RT SEEK  A PLAY  START+/SEL- VOL", GRAY)
     present_canvas(framebuffer, canvas)
     return rows, selected
 
@@ -584,12 +621,17 @@ def draw_now_playing(framebuffer, player: MpvPlayer):
               WHITE)
     draw_text(canvas, 16, 144, f"TRACK {info['index'] + 1} / {max(1, info['count'])}",
               GRAY)
+    vol = info["volume"]
+    draw_text(canvas, 16, 160, f"VOLUME {vol:3d}", CYAN)
+    fill_rect(canvas, 16, 174, WIDTH - 32, 8, DARK_GREEN)
+    fill_rect(canvas, 16, 174,
+              max(1, int((WIDTH - 32) * (vol / VOLUME_MAX))), 8, GREEN)
     if info["duration"] > 0:
-        fill_rect(canvas, 16, 170, WIDTH - 32, 10, DARK_GREEN)
+        fill_rect(canvas, 16, 188, WIDTH - 32, 4, DARK_GREEN)
         width = int((WIDTH - 32) * min(1.0, info["position"] / info["duration"]))
-        fill_rect(canvas, 16, 170, max(1, width), 10, GREEN)
-    draw_text(canvas, 8, 200, "B:LIBRARY  SEL:STOP", GRAY)
-    draw_text(canvas, 8, 216, "UP/DN: SEEK +/-15S", GRAY)
+        fill_rect(canvas, 16, 188, max(1, width), 4, YELLOW)
+    draw_text(canvas, 8, 206, "B:LIBRARY  SEL:STOP", GRAY)
+    draw_text(canvas, 8, 220, "UP/DN: VOLUME +/-", GRAY)
     present_canvas(framebuffer, canvas)
 
 
@@ -637,9 +679,9 @@ def run():
                 elif code == KEY_RIGHT:
                     player.seek(SEEK_STEP)
                 elif code == KEY_UP:
-                    player.seek(-SEEK_STEP_FAST)
+                    player.adjust_volume(VOLUME_STEP)
                 elif code == KEY_DOWN:
-                    player.seek(SEEK_STEP_FAST)
+                    player.adjust_volume(-VOLUME_STEP)
                 elif code == KEY_P:
                     player.prev_track()
                 elif code == KEY_ESC:
@@ -674,16 +716,29 @@ def run():
             elif code == KEY_ESC:
                 if player.active():
                     player.next_track()
+            elif code == KEY_1:
+                # Start = volume up while a track is already playing in library.
+                if player.active():
+                    level = player.adjust_volume(VOLUME_STEP)
+                    status = f"VOL {level}"
             elif code == KEY_5:
-                if player.active() and player.status()["playing"]:
+                if not player.active() or not player.status()["playing"]:
+                    continue
+                # Select = volume down while playing; at 0, Select stops.
+                level = player.volume()
+                if level is None:
+                    level = load_saved_volume()
+                if level <= VOLUME_MIN:
                     player.stop_playback()
                     status = "STOPPED"
+                else:
+                    status = f"VOL {player.adjust_volume(-VOLUME_STEP)}"
             elif code == KEY_ENTER:
                 if cwd == MUSIC_ROOT:
                     break
                 cwd = cwd.parent
                 selected = 0
-            elif code in (KEY_TAB, KEY_1):
+            elif code == KEY_TAB:
                 label, path = rows[selected]
                 if label == "..":
                     if cwd != MUSIC_ROOT:
