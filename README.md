@@ -544,7 +544,7 @@ through the MAX98357 (mpv → ALSA). Subfolders are supported. Copy
 | Y / X | Previous / next track | Previous / next track |
 | Select | Volume − (stop at 0) | Stop |
 
-Volume is mpv software gain (0–100), persisted in `/opt/gamepup/saves/music-volume`.
+Volume is the ALSA softvol control `PCM` on the MAX98357 card (the amp has no hardware mixer). mpv stays at unity gain. The level (0–100) is stored in `/opt/gamepup/saves/music-volume` and applied with `amixer`.
 Requires `mpv`. Override the ALSA device with `GAMEPUP_ALSA_DEVICE` if needed.
 
 ## Hardware tester

@@ -316,6 +316,9 @@ copy_scripts() {
 	install -d -m 0755 "$DIST_DIR/etc/modules-load.d"
 	install -m 0644 "$ROOT_DIR/emulator/gamepup-alsa.conf" \
 		"$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf"
+	install -d -m 0755 "$DIST_DIR/etc/alsa/conf.d"
+	install -m 0644 "$ROOT_DIR/emulator/gamepup-softvol.conf" \
+		"$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf"
 }
 
 main() {

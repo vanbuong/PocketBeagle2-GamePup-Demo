@@ -285,6 +285,9 @@ fi
 install -d -m 0755 /etc/modules-load.d
 install -m 0644 "$SCRIPT_DIR/emulator/gamepup-alsa.conf" \
 	/etc/modules-load.d/gamepup-alsa.conf
+install -d -m 0755 /etc/alsa/conf.d
+install -m 0644 "$SCRIPT_DIR/emulator/gamepup-softvol.conf" \
+	/etc/alsa/conf.d/50-gamepup-softvol.conf
 modprobe snd-soc-davinci-mcasp 2>/dev/null || true
 modprobe snd-soc-max98357a 2>/dev/null || true
 modprobe snd-soc-simple-card 2>/dev/null || true

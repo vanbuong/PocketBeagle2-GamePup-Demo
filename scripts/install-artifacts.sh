@@ -60,6 +60,12 @@ if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
 	fi
 fi
 
+if [ -f "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" ]; then
+	install -d -m 0755 /etc/alsa/conf.d
+	install -m 0644 "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" \
+		/etc/alsa/conf.d/50-gamepup-softvol.conf
+fi
+
 # Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
