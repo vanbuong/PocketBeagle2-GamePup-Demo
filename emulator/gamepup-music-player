@@ -161,40 +161,66 @@ def read_fb_info(framebuffer):
     return _fb_info
 
 
+def _rgb565(color: int) -> int:
+    red = (color >> 16) & 0xff
+    green = (color >> 8) & 0xff
+    blue = color & 0xff
+    return ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+
+
 def present_canvas(framebuffer, canvas):
+    """Blit RGB888 canvas to fb. Fast path avoids per-pixel Python calls."""
     info = read_fb_info(framebuffer)
     stride = info["stride"]
     height = info["height"]
     width = info["width"]
     bpp = info["bpp"]
+
+    if bpp == 16:
+        # One Python pass into a packed RGB565 buffer (array 'H' is native).
+        pixels = array("H", (_rgb565(color) for color in canvas))
+        if width == WIDTH and height == HEIGHT:
+            packed = pixels.tobytes()
+            if stride == WIDTH * 2:
+                os.pwrite(framebuffer, packed, 0)
+                return
+            frame = bytearray(stride * HEIGHT)
+            row = WIDTH * 2
+            for y in range(HEIGHT):
+                src = y * row
+                dst = y * stride
+                frame[dst:dst + row] = packed[src:src + row]
+            os.pwrite(framebuffer, frame, 0)
+            return
+        if width == HEIGHT and height == WIDTH:
+            frame = bytearray(stride * height)
+            for y in range(HEIGHT):
+                row_base = y * WIDTH
+                for x in range(WIDTH):
+                    dst_x = y
+                    dst_y = WIDTH - 1 - x
+                    offset = dst_y * stride + dst_x * 2
+                    frame[offset:offset + 2] = int(pixels[row_base + x]).to_bytes(
+                        2, "little")
+            os.pwrite(framebuffer, frame, 0)
+            return
+
+    # 32-bpp or unexpected geometry fallback.
     frame = bytearray(stride * height)
-
-    def put_pixel(dst_x, dst_y, color):
-        if bpp == 16:
-            red = (color >> 16) & 0xff
-            green = (color >> 8) & 0xff
-            blue = color & 0xff
-            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
-            offset = dst_y * stride + dst_x * 2
-            frame[offset:offset + 2] = int(value).to_bytes(2, "little")
-        else:
-            offset = dst_y * stride + dst_x * 4
-            frame[offset:offset + 4] = int(color).to_bytes(4, "little")
-
     if width == WIDTH and height == HEIGHT:
-        src = memoryview(canvas)
         for y in range(HEIGHT):
             for x in range(WIDTH):
-                put_pixel(x, y, int(src[y * WIDTH + x]))
+                color = int(canvas[y * WIDTH + x])
+                offset = y * stride + x * 4
+                frame[offset:offset + 4] = int(color).to_bytes(4, "little")
     else:
-        src = memoryview(canvas)
         for y in range(HEIGHT):
             for x in range(WIDTH):
-                put_pixel(y, WIDTH - 1 - x, int(src[y * WIDTH + x]))
-    view = memoryview(frame)
-    written = 0
-    while written < len(frame):
-        written += os.pwrite(framebuffer, view[written:], written)
+                color = int(canvas[y * WIDTH + x])
+                dst_x, dst_y = y, WIDTH - 1 - x
+                offset = dst_y * stride + dst_x * 4
+                frame[offset:offset + 4] = int(color).to_bytes(4, "little")
+    os.pwrite(framebuffer, frame, 0)
 
 
 def open_buttons():
