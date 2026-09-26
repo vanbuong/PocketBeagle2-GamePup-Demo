@@ -25,7 +25,35 @@ for candidate in /boot/firmware/extlinux/extlinux.conf \
 		break
 	fi
 done
-DEVICE_USER=${DEVICE_USER:-beagle}
+# Prefer an existing login account. Stock Armbian uses "beagle"; some images
+# use another UID>=1000 name (e.g. buongvv). Override with DEVICE_USER=.
+resolve_device_user() {
+	if [ -n "${DEVICE_USER:-}" ]; then
+		printf '%s\n' "$DEVICE_USER"
+		return 0
+	fi
+	# Who ran sudo ./install.sh — usually the board login (e.g. buongvv).
+	if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] &&
+		id "$SUDO_USER" >/dev/null 2>&1; then
+		printf '%s\n' "$SUDO_USER"
+		return 0
+	fi
+	for candidate in beagle debian ubuntu; do
+		if id "$candidate" >/dev/null 2>&1; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+	# First non-system login user (uid >= 1000), excluding nobody.
+	awk -F: '$3 >= 1000 && $1 != "nobody" { print $1; exit }' /etc/passwd
+}
+
+DEVICE_USER=$(resolve_device_user)
+if [ -z "$DEVICE_USER" ] || ! id "$DEVICE_USER" >/dev/null 2>&1; then
+	echo "No DEVICE_USER found. Set DEVICE_USER=yourlogin and re-run." >&2
+	exit 1
+fi
+echo "GamePup service user: $DEVICE_USER"
 
 resolve_overlay_dir() {
 	for d in /boot/firmware/overlays /boot/overlays /boot/dtb/ti \
@@ -195,19 +223,25 @@ install -m 0644 "$SCRIPT_DIR/emulator/pb2-usb-gadget.service" \
 install -d -m 0755 /usr/local/share/gamepup/rom-drive /opt/gamepup/saves
 install -m 0644 "$SCRIPT_DIR/emulator/rom-drive/README.txt" \
 	/usr/local/share/gamepup/rom-drive/README.txt
-install -m 0440 "$SCRIPT_DIR/emulator/gamepup-rom-import.sudoers" \
-	/etc/sudoers.d/gamepup-rom-import
+# Rewrite hardcoded "beagle" to the board login account.
+sed "s/^beagle /$DEVICE_USER /" \
+	"$SCRIPT_DIR/emulator/gamepup-rom-import.sudoers" \
+	> /etc/sudoers.d/gamepup-rom-import
+chmod 0440 /etc/sudoers.d/gamepup-rom-import
 install -m 0644 "$SCRIPT_DIR/emulator/gamepup-rom-import-watch.service" \
 	/etc/systemd/system/gamepup-rom-import-watch.service
-install -m 0644 "$SCRIPT_DIR/emulator/gamepup-game.service" \
-	/etc/systemd/system/gamepup-game.service
+sed -e "s/^User=beagle$/User=$DEVICE_USER/" \
+	-e "s/^Group=beagle$/Group=$DEVICE_USER/" \
+	"$SCRIPT_DIR/emulator/gamepup-game.service" \
+	> /etc/systemd/system/gamepup-game.service
+chmod 0644 /etc/systemd/system/gamepup-game.service
 visudo -cf /etc/sudoers.d/gamepup-rom-import
-if id "$DEVICE_USER" >/dev/null 2>&1; then
-	install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 \
-		/opt/gamepup/games/nes /opt/gamepup/games/gbc \
-		/opt/gamepup/games/n64 /opt/gamepup/games/doom
-	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/saves /opt/gamepup/gifs
-fi
+install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 \
+	/opt/gamepup/games/nes /opt/gamepup/games/gbc \
+	/opt/gamepup/games/n64 /opt/gamepup/games/doom
+chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/saves /opt/gamepup/gifs
+usermod -a -G video,render,input,spi,i2c "$DEVICE_USER" 2>/dev/null || \
+	usermod -a -G video,input,spi,i2c "$DEVICE_USER" 2>/dev/null || true
 /usr/local/libexec/gamepup-rom-drive-setup
 systemctl daemon-reload
 # Stock BeagleBoard NCM-only gadgets claim the USB device controller; GamePup

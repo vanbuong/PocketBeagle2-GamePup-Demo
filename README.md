@@ -265,8 +265,11 @@ sudo systemctl restart pb2-usb-gadget.service
 journalctl -u pb2-usb-gadget.service -b --no-pager
 ```
 
-The installer adds `beagle` to `i2c` and a new `spi` group. The stock image
-already puts `beagle` in `input` and `video`. Group changes take effect at the
+The installer picks the service account automatically (`beagle` if present,
+otherwise the first UID≥1000 login such as `buongvv`) and rewrites
+`gamepup-game.service` `User=`/`Group=` plus the rom-import sudoers entry.
+Override with `DEVICE_USER=yourname sudo ./install.sh`. It also adds that
+user to `video`, `input`, `spi`, and `i2c`. Group changes take effect at the
 next login.
 
 To watch button events interactively:

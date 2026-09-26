@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
+# install.sh rewrites User=/Group= to DEVICE_USER (beagle, or the board login).
 [Unit]
 Description=GamePup game selection menu
 After=multi-user.target
