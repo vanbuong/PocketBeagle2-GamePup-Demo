@@ -169,58 +169,53 @@ def _rgb565(color: int) -> int:
 
 
 def present_canvas(framebuffer, canvas):
-    """Blit RGB888 canvas to fb. Fast path avoids per-pixel Python calls."""
+    """Blit RGB888 canvas to fb0 as RGB565 (landscape) with a single pass."""
     info = read_fb_info(framebuffer)
     stride = info["stride"]
     height = info["height"]
     width = info["width"]
     bpp = info["bpp"]
+    if bpp != 16:
+        raise OSError(f"music player expects 16-bit fb, got {bpp}")
 
-    if bpp == 16:
-        # One Python pass into a packed RGB565 buffer (array 'H' is native).
-        pixels = array("H", (_rgb565(color) for color in canvas))
-        if width == WIDTH and height == HEIGHT:
-            packed = pixels.tobytes()
-            if stride == WIDTH * 2:
-                os.pwrite(framebuffer, packed, 0)
-                return
-            frame = bytearray(stride * HEIGHT)
-            row = WIDTH * 2
-            for y in range(HEIGHT):
-                src = y * row
-                dst = y * stride
-                frame[dst:dst + row] = packed[src:src + row]
-            os.pwrite(framebuffer, frame, 0)
-            return
-        if width == HEIGHT and height == WIDTH:
-            frame = bytearray(stride * height)
-            for y in range(HEIGHT):
-                row_base = y * WIDTH
-                for x in range(WIDTH):
-                    dst_x = y
-                    dst_y = WIDTH - 1 - x
-                    offset = dst_y * stride + dst_x * 2
-                    frame[offset:offset + 2] = int(pixels[row_base + x]).to_bytes(
-                        2, "little")
-            os.pwrite(framebuffer, frame, 0)
-            return
+    n = WIDTH * HEIGHT
+    pixels = array("H", [0]) * n
+    # Tight convert: canvas is 0x00RRGGBB
+    for i in range(n):
+        c = canvas[i]
+        pixels[i] = (
+            ((c >> 19) & 0x1F) << 11
+            | ((c >> 10) & 0x3F) << 5
+            | ((c >> 3) & 0x1F)
+        )
+    packed = pixels.tobytes()
 
-    # 32-bpp or unexpected geometry fallback.
-    frame = bytearray(stride * height)
     if width == WIDTH and height == HEIGHT:
+        if stride == WIDTH * 2:
+            os.pwrite(framebuffer, packed, 0)
+            return
+        frame = bytearray(stride * HEIGHT)
+        row = WIDTH * 2
         for y in range(HEIGHT):
-            for x in range(WIDTH):
-                color = int(canvas[y * WIDTH + x])
-                offset = y * stride + x * 4
-                frame[offset:offset + 4] = int(color).to_bytes(4, "little")
-    else:
+            src = y * row
+            dst = y * stride
+            frame[dst:dst + row] = packed[src:src + row]
+        os.pwrite(framebuffer, frame, 0)
+        return
+
+    # Portrait fb: rotate 90° CW into destination.
+    if width == HEIGHT and height == WIDTH:
+        frame = bytearray(stride * height)
+        mv = memoryview(frame).cast("H")
         for y in range(HEIGHT):
+            row_base = y * WIDTH
             for x in range(WIDTH):
-                color = int(canvas[y * WIDTH + x])
-                dst_x, dst_y = y, WIDTH - 1 - x
-                offset = dst_y * stride + dst_x * 4
-                frame[offset:offset + 4] = int(color).to_bytes(4, "little")
-    os.pwrite(framebuffer, frame, 0)
+                dst_x = y
+                dst_y = WIDTH - 1 - x
+                mv[dst_y * (stride // 2) + dst_x] = pixels[row_base + x]
+        os.pwrite(framebuffer, frame, 0)
+        return
+    raise OSError(f"Unsupported fb geometry {width}x{height}")
 
 
 def open_buttons():
@@ -386,81 +381,55 @@ class MpvPlayer:
                 pass
         return MPV_SOCKET
 
-    def _audio_device_candidates(self):
-        raw = self.device.strip() or "default"
-        if raw.startswith("alsa/"):
-            raw = raw[5:]
-        # Prefer bare ALSA names; mpv 0.40 accepts plughw:0,0 without alsa/ prefix.
-        candidates = []
-        for value in (raw, f"alsa/{raw}", "default", "alsa/default"):
-            if value and value not in candidates:
-                candidates.append(value)
-        return candidates
-
     def start(self):
+        """Start idle mpv once (same fast path as the original player)."""
         if self.process and self.process.poll() is None:
             return
         if not shutil_which("mpv"):
             raise RuntimeError("mpv binary not found in PATH")
 
-        errors = []
-        for audio_device in self._audio_device_candidates():
-            socket_path = self._socket_path()
-            log_path = MPV_LOG
-            command = [
-                "mpv",
-                "--no-config",
-                "--idle=yes",
-                "--vo=null",
-                "--no-video",
-                "--force-window=no",
-                "--really-quiet",
-                "--no-terminal",
-                "--no-input-default-bindings",
-                "--keep-open=yes",
-                "--ao=alsa",
-                f"--audio-device={audio_device}",
-                f"--input-ipc-server={socket_path}",
-                f"--log-file={log_path}",
-            ]
-            try:
-                self.process = subprocess.Popen(
-                    command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except OSError as error:
-                raise RuntimeError(f"mpv unavailable: {error}") from error
+        socket_path = self._socket_path()
+        audio_device = self.device
+        if not audio_device.startswith("alsa/"):
+            audio_device = f"alsa/{audio_device}"
+        command = [
+            "mpv",
+            "--no-config",
+            "--idle=yes",
+            "--vo=null",
+            "--no-video",
+            "--force-window=no",
+            "--really-quiet",
+            "--no-terminal",
+            "--no-input-default-bindings",
+            "--keep-open=no",
+            "--ao=alsa",
+            f"--audio-device={audio_device}",
+            f"--input-ipc-server={socket_path}",
+        ]
+        try:
+            self.process = subprocess.Popen(
+                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as error:
+            raise RuntimeError(f"mpv unavailable: {error}") from error
 
-            deadline = time.monotonic() + 4.0
-            while time.monotonic() < deadline:
-                if socket_path.exists():
-                    # Confirm IPC answers before claiming success.
-                    if self.get_property("idle-active") is not None or \
-                            self.command("get_property", "volume") is not None:
-                        self.device = audio_device.removeprefix("alsa/")
-                        self.last_error = ""
-                        print(f"mpv ready ao={self.device} ipc={socket_path}",
-                              file=sys.stderr)
-                        return
-                if self.process.poll() is not None:
-                    break
-                time.sleep(0.05)
-
-            detail = ""
-            try:
-                detail = log_path.read_text(encoding="utf-8", errors="replace").strip()
-            except OSError:
-                pass
-            # Prefer the tail — mpv logs are verbose.
-            if detail:
-                detail = detail[-400:]
-            rc = self.process.poll() if self.process else None
-            self.stop()
-            errors.append(
-                f"audio-device={audio_device} rc={rc}"
-                + (f": {detail}" if detail else ""))
-
-        self.last_error = " | ".join(errors) if errors else "unknown"
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if socket_path.exists():
+                self.device = audio_device.removeprefix("alsa/")
+                self.last_error = ""
+                # Apply saved volume once at idle start.
+                self.command("set_property", "volume", load_saved_volume())
+                print(f"mpv ready ao={self.device} ipc={socket_path}",
+                      file=sys.stderr)
+                return
+            if self.process.poll() is not None:
+                break
+            time.sleep(0.05)
+        self.stop()
         raise RuntimeError(
-            "mpv IPC socket did not appear. " + self.last_error)
+            f"mpv IPC socket did not appear ({socket_path}). "
+            "Check: mpv --ao=alsa --audio-device=help")
 
     def stop(self):
         if self.process and self.process.poll() is None:
@@ -478,7 +447,7 @@ class MpvPlayer:
         except OSError:
             pass
 
-    def _rpc(self, command, timeout=0.4):
+    def _rpc(self, command, timeout=0.15):
         if not MPV_SOCKET.exists():
             return None
         payload = (json.dumps({"command": command}) + "\n").encode("utf-8")
@@ -523,14 +492,15 @@ class MpvPlayer:
     def play_list(self, tracks: list[Path], start_index: int = 0):
         if not tracks:
             return False
-        self.start()
+        if not self.active():
+            self.start()
         self.playlist = list(tracks)
         self.index = max(0, min(start_index, len(tracks) - 1))
         self.command("loadfile", str(self.playlist[0]), "replace")
         for track in self.playlist[1:]:
             self.command("loadfile", str(track), "append")
-        self.command("playlist-play-index", self.index)
-        self.command("set_property", "volume", load_saved_volume())
+        if self.index > 0:
+            self.command("playlist-play-index", self.index)
         self.command("set_property", "pause", False)
         return True
 
@@ -730,60 +700,67 @@ def draw_now_playing(framebuffer, player: MpvPlayer):
 
 
 def run():
+    try:
+        ensure_music_root()
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
+        return 1
+
     device = alsa_device()
     print(f"Music player ALSA device: {device}", file=sys.stderr)
     global MPV_SOCKET, MPV_LOG
     MPV_SOCKET, MPV_LOG = resolve_mpv_paths()
     print(f"mpv IPC path: {MPV_SOCKET}", file=sys.stderr)
 
-    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
-    draw_message(framebuffer, "MUSIC", "LOADING...", f"ALSA {device}"[:48])
-
     if not shutil_which("mpv"):
-        draw_message(framebuffer, "MUSIC", "MPV NOT FOUND",
-                     "sudo apt-get install -y mpv")
-        time.sleep(2.0)
-        os.close(framebuffer)
-        return 1
-
-    try:
-        ensure_music_root()
-    except RuntimeError as error:
-        print(error, file=sys.stderr)
-        draw_message(framebuffer, "MUSIC", "MUSIC DIR ERROR",
-                     "chown /opt/gamepup")
-        time.sleep(2.5)
-        os.close(framebuffer)
+        print("mpv not found in PATH. Install: sudo apt-get install -y mpv",
+              file=sys.stderr)
         return 1
 
     player = MpvPlayer(device)
+    try:
+        # Start idle mpv up front (original behavior) so A→play is just loadfile.
+        player.start()
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
+        return 1
+
+    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
     input_fd = -1
     cwd = MUSIC_ROOT
     selected = 0
     mode = "browser"
     status = f"DEV {device}"[:48]
     play_grace_until = 0.0
+    need_redraw = True
+    last_now_draw = 0.0
 
     try:
         input_fd = open_buttons()
-        # Parent menu selected this tool with A — ignore that press/release.
-        drain_keys(input_fd, settle_s=0.45)
+        drain_keys(input_fd, settle_s=0.35)
 
         while running:
             if mode == "now":
                 if not player.active():
                     mode = "browser"
                     status = "MPV EXITED"
+                    need_redraw = True
                     continue
                 info = player.status()
                 if not info["playing"] and time.monotonic() >= play_grace_until:
                     mode = "browser"
                     status = "PLAYBACK ENDED"
+                    need_redraw = True
                     continue
-                draw_now_playing(framebuffer, player)
-                code = wait_key(input_fd, 0.15)
+                now = time.monotonic()
+                if need_redraw or now - last_now_draw >= 0.35:
+                    draw_now_playing(framebuffer, player)
+                    last_now_draw = now
+                    need_redraw = False
+                code = wait_key(input_fd, 0.12)
                 if code is None:
                     continue
+                need_redraw = True
                 if code in (KEY_TAB, KEY_1):
                     player.toggle_pause()
                 elif code == KEY_5:
@@ -807,12 +784,28 @@ def run():
                     status = "PLAYING IN BACKGROUND"
                 continue
 
-            entries = list_entries(cwd)
-            rows, selected = draw_browser(
-                framebuffer, cwd, entries, selected, player, status)
+            if need_redraw:
+                entries = list_entries(cwd)
+                rows, selected = draw_browser(
+                    framebuffer, cwd, entries, selected, player, status)
+            else:
+                entries = list_entries(cwd)
+                rows = []
+                if cwd != MUSIC_ROOT:
+                    rows.append(("..", None))
+                for entry in entries:
+                    rows.append((relative_label(entry, cwd), entry))
+                if not rows:
+                    rows.append(("(EMPTY FOLDER)", None))
+                selected = max(0, min(selected, len(rows) - 1))
+
             code = wait_key(input_fd, 0.2)
             if code is None:
+                # Refresh footer occasionally while something is playing in bg.
+                if player.active() and player.playlist:
+                    need_redraw = True
                 continue
+            need_redraw = True
             if code == KEY_UP:
                 selected = (selected - 1) % len(rows)
             elif code == KEY_DOWN:
@@ -872,22 +865,18 @@ def run():
                     except ValueError:
                         tracks = [path]
                         index = 0
-                    draw_message(framebuffer, "MUSIC", "STARTING MPV...",
-                                 path.name[:48])
                     try:
                         if player.play_list(tracks, index):
                             mode = "now"
-                            play_grace_until = time.monotonic() + 3.0
+                            play_grace_until = time.monotonic() + 2.0
                             status = f"PLAY {path.name}"[:48]
-                            drain_keys(input_fd, settle_s=0.2)
+                            last_now_draw = 0.0
+                            drain_keys(input_fd, settle_s=0.15)
                         else:
                             status = "PLAY FAILED"
                     except RuntimeError as error:
                         print(error, file=sys.stderr)
-                        status = "MPV FAIL — see stderr"[:48]
-                        draw_message(framebuffer, "MUSIC", "MPV FAILED",
-                                     status)
-                        time.sleep(1.2)
+                        status = "MPV FAIL"[:48]
     finally:
         player.stop()
         if input_fd >= 0:
