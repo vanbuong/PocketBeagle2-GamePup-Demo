@@ -75,7 +75,6 @@ If the buzzer node is missing, rebuild/reinstall
 `overlays/k3-am62-pocketbeagle2-gamepup-audio.dtbo` (epwm2 `pinctrl-0 = <>`,
 buzzer owns the P1.33 pinmux) and reboot. Menu beeps are skipped when
 `/opt/gamepup/saves/menu-beeps-muted` or `audio-muted` exists.
-```
 
 SD_MODE is held high by a `gpio-leds` hog on P1.36 (`gamepup:max98357-sdmode`).
 If you prefer, hard-wire SD_MODE to 3.3 V instead.

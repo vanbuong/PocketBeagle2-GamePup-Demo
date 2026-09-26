@@ -21,8 +21,8 @@ FRAMEBUFFER = "/dev/fb0"
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 INPUT_FALLBACK = "/dev/input/event0"
 BUZZER_CANDIDATES = (
-	"/dev/input/by-path/platform-gamepup-buzzer-event",
-	"/dev/input/by-path/platform-pwm-beeper-event",
+    "/dev/input/by-path/platform-gamepup-buzzer-event",
+    "/dev/input/by-path/platform-pwm-beeper-event",
 )
 FBCON = "/usr/local/libexec/gamepup-fbcon"
 BACKLIGHT_PERMISSIONS = "/usr/local/libexec/gamepup-backlight-permissions"

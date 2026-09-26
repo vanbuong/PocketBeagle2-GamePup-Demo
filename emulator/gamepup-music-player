@@ -561,7 +561,7 @@ def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlay
                  status_text: str):
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     rel = "." if cwd == MUSIC_ROOT else str(cwd.relative_to(MUSIC_ROOT))
-    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:TRK START/SEL:VOL")
+    draw_chrome(canvas, "MUSIC", "A:OPEN Y/X:TRK START+/SEL-:VOL")
     draw_text(canvas, 8, 34, f"/{rel}"[:48], CYAN)
 
     rows = []
@@ -600,7 +600,7 @@ def draw_browser(framebuffer, cwd: Path, entries, selected: int, player: MpvPlay
             fill_rect(canvas, 8, 230, max(1, width), 4, GREEN)
     else:
         draw_text(canvas, 8, 202, status_text[:48], GRAY)
-        draw_text(canvas, 8, 216, "LT/RT SEEK  A PLAY  START+/SEL- VOL", GRAY)
+        draw_text(canvas, 8, 216, "A PLAY  START/SEL VOL  LT/RT SEEK", GRAY)
     present_canvas(framebuffer, canvas)
     return rows, selected
 
