@@ -161,13 +161,6 @@ def read_fb_info(framebuffer):
     return _fb_info
 
 
-def _rgb565(color: int) -> int:
-    red = (color >> 16) & 0xff
-    green = (color >> 8) & 0xff
-    blue = color & 0xff
-    return ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
-
-
 def present_canvas(framebuffer, canvas):
     """Blit RGB888 canvas to fb0 as RGB565 (landscape) with a single pass."""
     info = read_fb_info(framebuffer)
@@ -250,26 +243,12 @@ def alsa_device():
 
 
 def resolve_mpv_paths():
-    """Pick a writable dir for the mpv IPC socket (buongvv may not own /run/gamepup)."""
-    candidates = []
-    xdg = os.environ.get("XDG_RUNTIME_DIR", "").strip()
-    if xdg:
-        candidates.append(Path(xdg))
-    candidates.extend((
-        Path(f"/run/user/{os.getuid()}"),
-        Path("/run/gamepup"),
-        Path("/tmp"),
-    ))
-    for root in candidates:
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-            probe = root / f".gamepup-mpv-write-{os.getpid()}"
-            probe.write_text("ok", encoding="ascii")
-            probe.unlink()
-        except OSError:
-            continue
-        return root / "gamepup-mpv-music.sock", root / "gamepup-mpv-music.log"
-    return Path("/tmp/gamepup-mpv-music.sock"), Path("/tmp/gamepup-mpv-music.log")
+    """Always use /tmp — /run/user/0 is missing under sudo and breaks IPC."""
+    uid = os.getuid()
+    return (
+        Path(f"/tmp/gamepup-mpv-{uid}.sock"),
+        Path(f"/tmp/gamepup-mpv-{uid}.log"),
+    )
 
 
 def ensure_music_root():
