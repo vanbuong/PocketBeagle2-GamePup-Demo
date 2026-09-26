@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+[Unit]
+Description=PocketBeagle 2 GamePup USB gadget (NCM + ACM + ROM inbox)
+Documentation=file:///usr/local/share/gamepup/rom-drive/README.txt
+After=local-fs.target systemd-modules-load.service
+Wants=systemd-modules-load.service
+# Stock BeagleBoard gadgets own the same UDC; take it over cleanly.
+Conflicts=bb-usb-gadgets.service usb-gadget.service gadget-init.service
+After=bb-usb-gadgets.service usb-gadget.service gadget-init.service
+ConditionPathExists=/var/lib/gamepup-rom-drive/gamepup-roms.img
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pb2-usb-gadget-ncm-acm start
+ExecStop=/usr/local/sbin/pb2-usb-gadget-ncm-acm stop
+ExecReload=/usr/local/sbin/pb2-usb-gadget-ncm-acm restart
+
+[Install]
+WantedBy=multi-user.target

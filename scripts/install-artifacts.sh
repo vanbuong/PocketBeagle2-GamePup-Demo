@@ -26,7 +26,7 @@ DEVICE_USER=${DEVICE_USER:-beagle}
 install -d -m 0755 /usr/local/bin /usr/local/include /usr/local/lib/libretro \
 	/usr/local/share/gamepup/bezels /opt/gamepup/gifs /opt/gamepup/saves \
 	/opt/gamepup/games/nes /opt/gamepup/games/gbc /opt/gamepup/games/n64 \
-	/opt/gamepup/games/doom
+	/opt/gamepup/games/doom /opt/gamepup/voice-memos /opt/gamepup/music
 
 install -m 0755 "$DIST_DIR/bin/"* /usr/local/bin/
 
@@ -47,27 +47,49 @@ if [ -d "$DIST_DIR/share/gifs" ]; then
 	install -m 0644 "$DIST_DIR/share/gifs/"*.gif /opt/gamepup/gifs/ 2>/dev/null || true
 fi
 
-# Doom shareware WAD (same as emulator/install-doom.sh)
+if [ -f "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" ]; then
+	install -d -m 0755 /etc/modules-load.d
+	install -m 0644 "$DIST_DIR/etc/modules-load.d/gamepup-alsa.conf" \
+		/etc/modules-load.d/gamepup-alsa.conf
+	modprobe snd-soc-davinci-mcasp 2>/dev/null || true
+	modprobe snd-soc-max98357a 2>/dev/null || true
+	modprobe snd-soc-simple-card 2>/dev/null || true
+	if [ -e /sys/bus/platform/devices/sound-gamepup ]; then
+		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/unbind 2>/dev/null || true
+		echo sound-gamepup > /sys/bus/platform/drivers/asoc-simple-card/bind 2>/dev/null || true
+	fi
+fi
+
+if [ -f "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" ]; then
+	install -d -m 0755 /etc/alsa/conf.d
+	install -m 0644 "$DIST_DIR/etc/alsa/conf.d/50-gamepup-softvol.conf" \
+		/etc/alsa/conf.d/50-gamepup-softvol.conf
+fi
+
+# Doom shareware WAD (same as emulator/install-doom.sh) and ALSA runtime
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y --no-install-recommends libasound2t64 || \
+	apt-get install -y --no-install-recommends libasound2
+apt-get install -y --no-install-recommends alsa-utils mpv
 if [ ! -f /usr/share/games/doom/doom1.wad ]; then
-	export DEBIAN_FRONTEND=noninteractive
-	apt-get update -qq
 	apt-get install -y --no-install-recommends doom-wad-shareware
 fi
 install -m 0644 /usr/share/games/doom/doom1.wad \
 	"/opt/gamepup/games/doom/Doom Shareware.wad"
 
 if id "$DEVICE_USER" >/dev/null 2>&1; then
-	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
-		/opt/gamepup/games \
-		2>/dev/null || true
-	chown "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/games/doom \
-		"/opt/gamepup/games/doom/Doom Shareware.wad"
+	install -d -o "$DEVICE_USER" -g "$DEVICE_USER" -m 0755 /opt/gamepup
+	touch /opt/gamepup/selected-rom
+	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup 2>/dev/null || true
 fi
 
 echo "Installed userspace artifacts from $DIST_DIR:"
-echo "  /usr/local/bin          (menu, retro, gpu-bench, hardware-test, ...)"
+echo "  /usr/local/bin          (menu, retro, gpu-bench, hardware-test, voice-memo, music-player, ...)"
 echo "  /usr/local/lib/libretro (cores, if present)"
 echo "  /usr/local/share/gamepup/bezels"
 echo "  /opt/gamepup/gifs"
+echo "  /opt/gamepup/voice-memos"
+echo "  /opt/gamepup/music"
 echo "  /opt/gamepup/games/doom/Doom Shareware.wad"
 echo "Skipped: kernel modules and device-tree overlay."

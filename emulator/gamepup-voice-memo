@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Voice memo recorder/player for GamePup MAX98357 + INMP441 I2S audio."""
+
+from array import array
+from datetime import datetime
+import fcntl
+import os
+from pathlib import Path
+import re
+import select
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+
+WIDTH = 320
+HEIGHT = 240
+FRAMEBUFFER = "/dev/fb0"
+INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
+INPUT_FALLBACK = "/dev/input/event0"
+MEMO_DIR = Path("/opt/gamepup/voice-memos")
+SAMPLE_RATE = 48000
+CHANNELS = 2
+SAMPLE_FORMAT = "S32_LE"
+BYTES_PER_FRAME = CHANNELS * 4
+MAX_RECORD_SECONDS = 120
+EVENT = struct.Struct("@llHHi")
+EV_KEY = 1
+EVIOCGRAB = 0x40044590
+FBIOGET_VSCREENINFO = 0x4600
+FBIOGET_FSCREENINFO = 0x4602
+
+KEY_1 = 2
+KEY_5 = 6
+KEY_TAB = 15
+KEY_ENTER = 28
+KEY_UP = 103
+KEY_DOWN = 108
+
+BLACK = 0x000000
+WHITE = 0xF4F4E8
+GREEN = 0x42D65C
+DARK_GREEN = 0x123D22
+YELLOW = 0xF4D35E
+BLUE = 0x174A70
+GRAY = 0x708078
+RED = 0xE85D5D
+
+FONT = {
+    " ": ("00000",) * 7,
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01111", "10000", "10000", "10111", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
+    "6": ("01110", "10000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "01110"),
+    "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
+    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
+    "?": ("01110", "10001", "00001", "00010", "00100", "00000", "00100"),
+}
+
+running = True
+_fb_info = None
+
+
+def stop_handler(_signum, _frame):
+    global running
+    running = False
+
+
+def fill_rect(canvas, x, y, width, height, color):
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(WIDTH, x + width), min(HEIGHT, y + height)
+    row = array("I", [color]) * max(0, x1 - x0)
+    for target_y in range(y0, y1):
+        canvas[target_y * WIDTH + x0:target_y * WIDTH + x1] = row
+
+
+def draw_text(canvas, x, y, text, color, scale=1):
+    cursor = x
+    for character in text.upper():
+        glyph = FONT.get(character, FONT["?"])
+        for glyph_y, bits in enumerate(glyph):
+            for glyph_x, bit in enumerate(bits):
+                if bit == "1":
+                    fill_rect(canvas, cursor + glyph_x * scale,
+                              y + glyph_y * scale, scale, scale, color)
+        cursor += 6 * scale
+
+
+def read_fb_info(framebuffer):
+    global _fb_info
+    if _fb_info is not None:
+        return _fb_info
+    var = array("B", [0]) * 160
+    fix = array("B", [0]) * 128
+    fcntl.ioctl(framebuffer, FBIOGET_VSCREENINFO, var, True)
+    fcntl.ioctl(framebuffer, FBIOGET_FSCREENINFO, fix, True)
+    xres = int.from_bytes(var[0:4], "little")
+    yres = int.from_bytes(var[4:8], "little")
+    bpp = int.from_bytes(var[24:28], "little")
+    try:
+        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+    except (OSError, ValueError):
+        stride = xres * (bpp // 8)
+    if bpp not in (16, 32):
+        raise OSError(f"Expected 16- or 32-bit framebuffer, got {bpp} bpp")
+    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+        raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
+    return _fb_info
+
+
+def present_canvas(framebuffer, canvas):
+    info = read_fb_info(framebuffer)
+    stride = info["stride"]
+    height = info["height"]
+    width = info["width"]
+    bpp = info["bpp"]
+    frame = bytearray(stride * height)
+
+    def put_pixel(dst_x, dst_y, color):
+        if bpp == 16:
+            red = (color >> 16) & 0xff
+            green = (color >> 8) & 0xff
+            blue = color & 0xff
+            value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+            offset = dst_y * stride + dst_x * 2
+            frame[offset:offset + 2] = int(value).to_bytes(2, "little")
+        else:
+            offset = dst_y * stride + dst_x * 4
+            frame[offset:offset + 4] = int(color).to_bytes(4, "little")
+
+    if width == WIDTH and height == HEIGHT:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(x, y, int(src[y * WIDTH + x]))
+    else:
+        src = memoryview(canvas)
+        for y in range(HEIGHT):
+            for x in range(WIDTH):
+                put_pixel(y, WIDTH - 1 - x, int(src[y * WIDTH + x]))
+    view = memoryview(frame)
+    written = 0
+    while written < len(frame):
+        written += os.pwrite(framebuffer, view[written:], written)
+
+
+def open_buttons():
+    for path in (INPUT, INPUT_FALLBACK):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            fcntl.ioctl(fd, EVIOCGRAB, 1)
+        except OSError as error:
+            print(f"EVIOCGRAB {path}: {error}", file=sys.stderr)
+        return fd
+    raise OSError("No GamePup button input device found")
+
+
+def alsa_device():
+    env = os.environ.get("GAMEPUP_ALSA_DEVICE", "").strip()
+    if env:
+        return env
+    try:
+        listing = subprocess.check_output(
+            ["aplay", "-l"], text=True, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return "default"
+    for line in listing.splitlines():
+        if re.search(r"GamePup|MAX98357|I2S", line, re.IGNORECASE):
+            match = re.search(r"card (\d+):", line)
+            if match:
+                return f"plughw:{match.group(1)},0"
+    return "default"
+
+
+def ensure_memo_dir():
+    MEMO_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def list_memos():
+    ensure_memo_dir()
+    return sorted(MEMO_DIR.glob("memo-*.wav"), key=lambda path: path.name, reverse=True)
+
+
+def memo_duration_seconds(path: Path) -> float:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0.0
+    # Skip ~44-byte WAV header; duration is approximate for UI.
+    payload = max(0, size - 44)
+    return payload / float(SAMPLE_RATE * BYTES_PER_FRAME)
+
+
+def format_duration(seconds: float) -> str:
+    total = max(0, int(seconds + 0.5))
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def memo_label(path: Path) -> str:
+    stamp = path.stem.removeprefix("memo-")
+    return f"{stamp} {format_duration(memo_duration_seconds(path))}"
+
+
+def stop_process(process):
+    if process is None or process.poll() is not None:
+        return
+    process.send_signal(signal.SIGINT)
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
+
+
+def drain_keys(input_fd):
+    while True:
+        readable, _, _ = select.select([input_fd], [], [], 0)
+        if not readable:
+            return
+        try:
+            os.read(input_fd, EVENT.size * 64)
+        except OSError:
+            return
+
+
+def wait_key(input_fd, timeout=0.1):
+    readable, _, _ = select.select([input_fd], [], [], timeout)
+    if not readable:
+        return None
+    data = os.read(input_fd, EVENT.size * 32)
+    for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+        _seconds, _micros, event_type, code, value = EVENT.unpack_from(data, offset)
+        if event_type == EV_KEY and value == 1:
+            return code
+    return None
+
+
+def draw_chrome(canvas, title, footer):
+    fill_rect(canvas, 0, 0, WIDTH, HEIGHT, BLACK)
+    title_width = (len(title) * 6 - 1) * 2
+    draw_text(canvas, (WIDTH - title_width) // 2, 3, title, GREEN, 2)
+    draw_text(canvas, 4, 20, footer, GRAY)
+    fill_rect(canvas, 3, 30, WIDTH - 6, 1, DARK_GREEN)
+
+
+def draw_list(framebuffer, memos, selected, status=""):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    draw_chrome(canvas, "VOICE MEMO", "A:OK SEL:DEL B:BACK")
+    items = ["+ NEW RECORDING"] + [memo_label(path)[:44] for path in memos] + ["BACK"]
+    visible = 15
+    first = max(0, min(selected - visible // 2, len(items) - visible))
+    for row_index, item_index in enumerate(range(first, min(first + visible, len(items)))):
+        y = 38 + row_index * 11
+        if item_index == selected:
+            fill_rect(canvas, 2, y - 2, WIDTH - 4, 10, BLUE)
+            color = YELLOW
+        else:
+            color = WHITE
+        draw_text(canvas, 8, y, items[item_index], color)
+    if status:
+        fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
+        draw_text(canvas, 8, 228, status[:48], GRAY)
+    present_canvas(framebuffer, canvas)
+    return items
+
+
+def draw_message(framebuffer, title, lines, footer="B:BACK"):
+    canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+    draw_chrome(canvas, title, footer)
+    y = 56
+    for line in lines:
+        draw_text(canvas, 16, y, line[:48], WHITE)
+        y += 16
+    present_canvas(framebuffer, canvas)
+
+
+def record_memo(framebuffer, input_fd, device):
+    ensure_memo_dir()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = MEMO_DIR / f"memo-{stamp}.wav"
+    temp = path.with_suffix(".partial.wav")
+    command = [
+        "arecord",
+        "-D", device,
+        "-c", str(CHANNELS),
+        "-r", str(SAMPLE_RATE),
+        "-f", SAMPLE_FORMAT,
+        "-t", "wav",
+        "-d", str(MAX_RECORD_SECONDS),
+        str(temp),
+    ]
+    try:
+        process = subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError as error:
+        draw_message(framebuffer, "RECORD", [f"ARECORD FAIL", str(error)[:40]],
+                     "B:BACK")
+        while running:
+            code = wait_key(input_fd, 0.2)
+            if code in (KEY_ENTER, KEY_TAB, KEY_1):
+                break
+        return None
+
+    started = time.monotonic()
+    drain_keys(input_fd)
+    kept = False
+    while running and process.poll() is None:
+        elapsed = time.monotonic() - started
+        remaining = max(0, MAX_RECORD_SECONDS - int(elapsed))
+        canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+        draw_chrome(canvas, "RECORDING", "A/START:STOP B:CANCEL")
+        draw_text(canvas, 16, 70, f"FILE {stamp}", WHITE)
+        draw_text(canvas, 16, 100, f"TIME {format_duration(elapsed)}", YELLOW)
+        draw_text(canvas, 16, 130, f"MAX {format_duration(MAX_RECORD_SECONDS)}", GRAY)
+        draw_text(canvas, 16, 160, f"LEFT {format_duration(remaining)}", GRAY)
+        fill_rect(canvas, 16, 190, min(WIDTH - 32, int((WIDTH - 32) * elapsed /
+                                                       MAX_RECORD_SECONDS)), 10, RED)
+        present_canvas(framebuffer, canvas)
+        code = wait_key(input_fd, 0.1)
+        if code in (KEY_TAB, KEY_1):
+            kept = True
+            stop_process(process)
+            break
+        if code == KEY_ENTER:
+            stop_process(process)
+            break
+        if elapsed >= MAX_RECORD_SECONDS:
+            kept = True
+            break
+
+    stop_process(process)
+    stderr = ""
+    if process.stderr:
+        try:
+            stderr = process.stderr.read().decode("utf-8", "replace").strip()
+        except OSError:
+            pass
+    if not kept:
+        temp.unlink(missing_ok=True)
+        return None
+    if not temp.exists() or temp.stat().st_size < 1024:
+        temp.unlink(missing_ok=True)
+        draw_message(framebuffer, "RECORD", [
+            "NO AUDIO CAPTURED",
+            (stderr or "CHECK MIC WIRING")[:40],
+        ], "B:BACK")
+        while running:
+            code = wait_key(input_fd, 0.2)
+            if code in (KEY_ENTER, KEY_TAB, KEY_1):
+                break
+        return None
+    temp.replace(path)
+    return path
+
+
+def play_memo(framebuffer, input_fd, device, path: Path):
+    command = ["aplay", "-D", device, "-q", str(path)]
+    try:
+        process = subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError as error:
+        draw_message(framebuffer, "PLAY", [f"APLAY FAIL", str(error)[:40]], "B:BACK")
+        while running:
+            code = wait_key(input_fd, 0.2)
+            if code in (KEY_ENTER, KEY_TAB, KEY_1):
+                break
+        return
+
+    duration = max(0.1, memo_duration_seconds(path))
+    started = time.monotonic()
+    drain_keys(input_fd)
+    while running and process.poll() is None:
+        elapsed = min(duration, time.monotonic() - started)
+        canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
+        draw_chrome(canvas, "PLAYING", "B:STOP")
+        draw_text(canvas, 16, 70, path.stem[:40], WHITE)
+        draw_text(canvas, 16, 100,
+                  f"{format_duration(elapsed)} / {format_duration(duration)}", YELLOW)
+        fill_rect(canvas, 16, 160, min(WIDTH - 32, int((WIDTH - 32) * elapsed / duration)),
+                  10, GREEN)
+        present_canvas(framebuffer, canvas)
+        code = wait_key(input_fd, 0.1)
+        if code in (KEY_ENTER, KEY_TAB, KEY_1, KEY_5):
+            stop_process(process)
+            break
+    stop_process(process)
+
+
+def confirm_delete(framebuffer, input_fd, path: Path) -> bool:
+    draw_message(framebuffer, "DELETE", [
+        "DELETE THIS MEMO?",
+        path.stem[:40],
+        "",
+        "A:YES  B:NO",
+    ], "A:YES B:NO")
+    drain_keys(input_fd)
+    while running:
+        code = wait_key(input_fd, 0.2)
+        if code in (KEY_TAB, KEY_1):
+            return True
+        if code == KEY_ENTER:
+            return False
+    return False
+
+
+def run():
+    device = alsa_device()
+    print(f"Voice memo ALSA device: {device}", file=sys.stderr)
+    ensure_memo_dir()
+    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+    input_fd = open_buttons()
+    selected = 0
+    status = f"DEV {device}"[:48]
+
+    try:
+        while running:
+            memos = list_memos()
+            items = draw_list(framebuffer, memos, selected, status)
+            selected = max(0, min(selected, len(items) - 1))
+            code = wait_key(input_fd, 0.25)
+            if code is None:
+                continue
+            if code == KEY_UP:
+                selected = (selected - 1) % len(items)
+            elif code == KEY_DOWN:
+                selected = (selected + 1) % len(items)
+            elif code == KEY_ENTER:
+                break
+            elif code == KEY_5:
+                if 1 <= selected <= len(memos):
+                    path = memos[selected - 1]
+                    if confirm_delete(framebuffer, input_fd, path):
+                        path.unlink(missing_ok=True)
+                        status = "DELETED"
+                        selected = min(selected, max(0, len(list_memos())))
+                    else:
+                        status = "DELETE CANCELLED"
+            elif code in (KEY_TAB, KEY_1):
+                if selected == 0:
+                    path = record_memo(framebuffer, input_fd, device)
+                    status = f"SAVED {path.name}"[:48] if path else "RECORD CANCELLED"
+                    selected = 0
+                elif selected == len(items) - 1:
+                    break
+                else:
+                    play_memo(framebuffer, input_fd, device, memos[selected - 1])
+                    status = "PLAY DONE"
+    finally:
+        try:
+            os.close(input_fd)
+        except OSError:
+            pass
+        try:
+            os.close(framebuffer)
+        except OSError:
+            pass
+    return 0
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--list":
+        for path in list_memos():
+            print(f"{format_duration(memo_duration_seconds(path))}\t{path}")
+        return 0
+    return run()
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, stop_handler)
+    signal.signal(signal.SIGTERM, stop_handler)
+    raise SystemExit(main())

@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * DEPRECATED for current PocketBeagle 2 + GamePup layouts.
+ *
+ * Prefer the split overlays under overlays/:
+ *   k3-am62-pocketbeagle2-spi0-ili9341.dts      (LCD on SPI0)
+ *   k3-am62-pocketbeagle2-gamepup-audio.dts     (buttons/buzzer/MAX98357)
+ *   k3-am62-pocketbeagle2-spi2-eth-wiz-click.dts (W5500 on SPI2)
+ *
+ * This monolithic file kept the LCD on SPI2 and is no longer installed by
+ * install.sh.
+ *
  * Portions derived from BBORG_GAMEPUP-00A2.dts:
  * Copyright (C) 2012 Texas Instruments Incorporated - https://www.ti.com/
  */
@@ -21,6 +31,8 @@
 &{/chosen} {
 	overlays {
 		gamepup-a4 = "PocketBeagle 2 GamePup A4";
+		/* Bump this string when audio DT changes; check via /proc. */
+		gamepup-a4-audio = "max98357-playback-v5-audio-graph";
 	};
 };
 
@@ -101,6 +113,33 @@
 			0x0164 0x200007 /* P1.02 alternate AM62x pad disabled */
 		>;
 	};
+
+	/*
+	 * McASP2 I2S (SoC bit/frame master), 3.3 V peripherals:
+	 *   MAX98357A amp:  P2.11 BCLK, P2.10 LRCLK, P2.05 DIN (AXR0 TX)
+	 *   P2.07 AXR1 reserved for a future mic capture path.
+	 *   P1.36A holds SD_MODE high (gpio-leds hog) so the amp stays out
+	 *   of shutdown without blocking the maxim,max98357a probe.
+	 */
+	/*
+	 * PIN_INPUT | mux = 0x050000 | mode (RXACTIVE + PULL_DISABLE).
+	 * McASP clocks need the input path even when the SoC is master.
+	 */
+	gamepup_mcasp2_pins: gamepup-mcasp2-pins {
+		pinctrl-single,pins = <
+			0x01d8 0x050008 /* P2.05 C15: MCASP2_AXR0 TX (amp DIN) */
+			0x01dc 0x050008 /* P2.07 E15: MCASP2_AXR1 (unused RX) */
+			0x0174 0x050002 /* P2.10 AD21: MCASP2_AFSX (LRCLK/WS) */
+			0x01d4 0x050008 /* P2.11 B15: MCASP2_ACLKX (BCLK/SCK) */
+		>;
+	};
+
+	gamepup_max98357_sdmode_pin: gamepup-max98357-sdmode-pin {
+		pinctrl-single,pins = <
+			0x01e8 0x010007 /* P1.36A B17: GPIO1_28 SD_MODE output */
+			0x00e0 0x200007 /* P1.36 V20: alternate pad disabled */
+		>;
+	};
 };
 
 &main_spi2 {
@@ -150,7 +189,7 @@
 
 &epwm2 {
 	status = "okay";
-	/* Keep P1.36 free; the buzzer supplies its P1.33 pinctrl below. */
+	/* Clear inherited EHRPWM2_A on P1.36; SD_MODE claims that pad below. */
 	pinctrl-names = "default";
 	pinctrl-0 = <>;
 };
@@ -168,7 +207,90 @@
 	};
 };
 
+/*
+ * McASP2 via target-path — do NOT use &mcasp2.
+ * Some PocketBeagle 2 / Armbian base DTBs omit mcasp2 from /__symbols__,
+ * and fdtoverlay then fails with FDT_ERR_NOTFOUND.  target-path + an
+ * audio-graph-card link needs no base symbol for McASP.
+ *
+ * Same serializer shape as BeaglePlay HDMI (playback-only, no tx/rx-num-evt).
+ */
+/ {
+	fragment@100 {
+		target-path = "/bus@f0000/audio-controller@2b20000";
+		__overlay__ {
+			#sound-dai-cells = <0>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&gamepup_mcasp2_pins>;
+			status = "okay";
+			op-mode = <0>; /* DAVINCI_MCASP_IIS_MODE */
+			tdm-slots = <2>;
+			auxclk-fs-ratio = <256>;
+			/* AXR0 = TX (MAX98357).  Remaining serializers inactive. */
+			serial-dir = <
+				1 0 0 0
+				0 0 0 0
+				0 0 0 0
+				0 0 0 0
+			>;
+
+			gamepup_mcasp2_port: port {
+				gamepup_mcasp2_ep: endpoint {
+					remote-endpoint = <&gamepup_max98357a_ep>;
+					dai-format = "i2s";
+					bitclock-master;
+					frame-master;
+					playback-only;
+				};
+			};
+		};
+	};
+};
+
 &{/} {
+	/*
+	 * Do not pass sdmode-gpios to maxim,max98357a: if GPIO1_28 cannot be
+	 * claimed (common when epwm2 still owns P1.36), the codec never
+	 * registers and the sound card stays deferred forever with modules
+	 * loaded but aplay -l empty.  Hold SD_MODE high separately.
+	 */
+	gamepup_max98357a: gamepup-max98357a {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0>;
+		status = "okay";
+
+		port {
+			gamepup_max98357a_ep: endpoint {
+				remote-endpoint = <&gamepup_mcasp2_ep>;
+			};
+		};
+	};
+
+	gamepup-max98357-sdmode {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_max98357_sdmode_pin>;
+
+		sdmode {
+			label = "gamepup:max98357-sdmode";
+			gpios = <&main_gpio1 28 0>;
+			default-state = "on";
+		};
+	};
+
+	/*
+	 * audio-graph-card links McASP↔MAX98357 via OF graph endpoints above.
+	 * Avoids &mcasp2 (missing on some base DTBs → FDT_ERR_NOTFOUND) and
+	 * avoids simple-audio-card codec-child name pitfalls.
+	 * No BBB-style fixed-clock + gpio-gate-clock: AM62 McASP2 has SoC fck.
+	 */
+	gamepup_sound: sound-gamepup {
+		compatible = "audio-graph-card";
+		label = "GamePup-MAX98357";
+		dais = <&gamepup_mcasp2_port>;
+		status = "okay";
+	};
+
 	gamepup_backlight: backlight-gamepup {
 		compatible = "pwm-backlight";
 		pwms = <&ecap2 0 100000 0>;
