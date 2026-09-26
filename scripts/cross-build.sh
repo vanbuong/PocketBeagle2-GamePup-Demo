@@ -155,11 +155,15 @@ fetch_driver_sources() {
 }
 
 build_overlay() {
-	log "Building device-tree overlay"
+	log "Building device-tree overlays"
 	mkdir -p "$DIST_DIR/dtbo"
-	dtc -@ -I dts -O dtb \
-		-o "$DIST_DIR/dtbo/k3-am6232-pocketbeagle2-gamepup-a4.dtbo" \
-		"$ROOT_DIR/k3-am6232-pocketbeagle2-gamepup-a4.dts"
+	for name in k3-am62-pocketbeagle2-spi0-ili9341 \
+		k3-am62-pocketbeagle2-gamepup-audio \
+		k3-am62-pocketbeagle2-spi2-eth-wiz-click; do
+		dtc -@ -I dts -O dtb \
+			-o "$DIST_DIR/dtbo/$name.dtbo" \
+			"$ROOT_DIR/overlays/$name.dts"
+	done
 }
 
 build_userspace() {

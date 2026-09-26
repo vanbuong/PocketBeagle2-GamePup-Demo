@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Allow members of the spi group to use the GamePup Click socket.
-SUBSYSTEM=="spidev", KERNEL=="spidev0.0", GROUP="spi", MODE="0660"
+# GamePup / Click peripherals. LCD uses DRM on SPI0; Eth Wiz uses the W5500
+# driver on SPI2. Keep spi group access for any leftover spidev nodes.
+SUBSYSTEM=="spidev", GROUP="spi", MODE="0660"

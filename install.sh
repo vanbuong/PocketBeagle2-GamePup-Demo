@@ -13,14 +13,44 @@ UPSTREAM_VERSION=v${KERNEL_VERSION%%-*}
 KERNEL_CC=${KERNEL_CC:-gcc-14}
 MODULE_SOURCE_DIR=/usr/src/gamepup-ili9341-$KERNEL_VERSION
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
-OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
-OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
-EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
+# Split overlays: LCD on SPI0, audio/controls, Eth Wiz on SPI2.
+OVERLAY_NAMES="k3-am62-pocketbeagle2-spi0-ili9341
+k3-am62-pocketbeagle2-gamepup-audio
+k3-am62-pocketbeagle2-spi2-eth-wiz-click"
+EXTLINUX_CONFIG=
+for candidate in /boot/firmware/extlinux/extlinux.conf \
+	/boot/extlinux/extlinux.conf; do
+	if [ -f "$candidate" ]; then
+		EXTLINUX_CONFIG=$candidate
+		break
+	fi
+done
 DEVICE_USER=${DEVICE_USER:-beagle}
+
+resolve_overlay_dir() {
+	for d in /boot/firmware/overlays /boot/overlays /boot/dtb/ti \
+		/boot/firmware/ti; do
+		if [ -d "$d" ]; then
+			printf '%s\n' "$d"
+			return 0
+		fi
+	done
+	install -d -m 0755 /boot/dtb/ti
+	printf '%s\n' /boot/dtb/ti
+}
+
+overlay_extlinux_path() {
+	abs=$1
+	case "$abs" in
+		/boot/firmware/*) printf '/%s\n' "${abs#/boot/firmware/}" ;;
+		/boot/*) printf '/%s\n' "${abs#/boot/}" ;;
+		*) printf '%s\n' "$abs" ;;
+	esac
+}
 
 missing_packages=
 for package in build-essential ca-certificates curl device-tree-compiler \
-	dosfstools gcc-14 libgif-dev; do
+	dosfstools gcc-14 libgif-dev mpv alsa-utils; do
 	if ! dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | \
 		grep -q '^ii'; then
 		missing_packages="$missing_packages $package"
@@ -63,8 +93,26 @@ install -m 0644 "$MODULE_SOURCE_DIR/drm_mipi_dbi.ko" "$MODULE_INSTALL_DIR/"
 install -m 0644 "$MODULE_SOURCE_DIR/ili9341.ko" "$MODULE_INSTALL_DIR/"
 depmod -a "$KERNEL_VERSION"
 
-dtc -@ -I dts -O dtb -o "$OVERLAY_TARGET" \
-	"$SCRIPT_DIR/$OVERLAY_NAME.dts"
+OVERLAY_DIR=$(resolve_overlay_dir)
+install -d -m 0755 "$OVERLAY_DIR"
+fdtoverlays_args=
+for OVERLAY_NAME in $OVERLAY_NAMES; do
+	src="$SCRIPT_DIR/overlays/$OVERLAY_NAME.dts"
+	dst="$OVERLAY_DIR/$OVERLAY_NAME.dtbo"
+	[ -f "$src" ] || {
+		echo "Missing overlay source: $src" >&2
+		exit 1
+	}
+	dtc -@ -I dts -O dtb -o "$dst" "$src"
+	rel=$(overlay_extlinux_path "$dst")
+	fdtoverlays_args="$fdtoverlays_args $rel"
+	# Mirror into /boot/dtbs/<kver>/ti when present (Armbian).
+	if [ -d "/boot/dtbs/$KERNEL_VERSION/ti" ]; then
+		install -m 0644 "$dst" \
+			"/boot/dtbs/$KERNEL_VERSION/ti/$OVERLAY_NAME.dtbo"
+	fi
+	echo "Built overlay: $dst"
+done
 
 if ! getent group spi >/dev/null 2>&1; then
 	groupadd --system spi
@@ -173,17 +221,32 @@ systemctl enable gamepup-oled-status.service
 systemctl enable --now gamepup-rom-import-watch.service
 systemctl enable gamepup-game.service
 
-if ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
+if [ -n "$EXTLINUX_CONFIG" ]; then
 	if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-a4" ]; then
 		cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-a4"
 	fi
-	sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays /dtb/ti/$OVERLAY_NAME.dtbo" \
+	# Drop prior GamePup / split-overlay fdtoverlays lines, then add the set.
+	sed -i \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*gamepup/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-spi0-ili9341/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-gamepup-audio/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am62-pocketbeagle2-spi2-eth-wiz/d' \
+		-e '/^[[:space:]]*fdtoverlays[[:space:]].*k3-am6232-pocketbeagle2-gamepup-a4/d' \
 		"$EXTLINUX_CONFIG"
+	if grep -q '^[[:space:]]*fdt[[:space:]]' "$EXTLINUX_CONFIG"; then
+		sed -i "/^[[:space:]]*fdt[[:space:]]/a\\  fdtoverlays$fdtoverlays_args" \
+			"$EXTLINUX_CONFIG"
+	else
+		printf '  fdtoverlays%s\n' "$fdtoverlays_args" >> "$EXTLINUX_CONFIG"
+	fi
+	echo "Updated $EXTLINUX_CONFIG with:$fdtoverlays_args"
+else
+	echo "No extlinux.conf found; install dtbos manually from $OVERLAY_DIR" >&2
 fi
 
 modprobe drm_mipi_dbi
 modprobe ili9341
 
-echo "GamePup A4 support installed for kernel $KERNEL_VERSION."
-echo "ILI9341 landscape 320x240 framebuffer will appear after reboot."
-echo "Reboot to apply the overlay."
+echo "GamePup support installed for kernel $KERNEL_VERSION."
+echo "Overlays: SPI0 ILI9341 + audio/controls + SPI2 Eth Wiz."
+echo "Reboot to apply the overlays."

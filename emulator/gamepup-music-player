@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import select
+from shutil import which as shutil_which
 import signal
 import socket
 import struct
@@ -300,6 +301,7 @@ class MpvPlayer:
         self.process = None
         self.playlist = []
         self.index = -1
+        self.last_error = ""
 
     def _socket_path(self) -> Path:
         MPV_SOCKET.parent.mkdir(parents=True, exist_ok=True)
@@ -310,40 +312,72 @@ class MpvPlayer:
                 pass
         return MPV_SOCKET
 
+    def _audio_device_candidates(self):
+        raw = self.device.strip() or "default"
+        if raw.startswith("alsa/"):
+            raw = raw[5:]
+        candidates = []
+        for value in (raw, f"alsa/{raw}", "alsa/default", "default"):
+            if value and value not in candidates:
+                candidates.append(value)
+        return candidates
+
     def start(self):
         if self.process and self.process.poll() is None:
             return
-        socket_path = self._socket_path()
-        audio_device = self.device
-        if not audio_device.startswith("alsa/"):
-            audio_device = f"alsa/{audio_device}"
-        command = [
-            "mpv",
-            "--idle=yes",
-            "--no-video",
-            "--force-window=no",
-            "--really-quiet",
-            "--no-terminal",
-            "--no-input-default-bindings",
-            "--keep-open=no",
-            f"--ao=alsa",
-            f"--audio-device={audio_device}",
-            f"--input-ipc-server={socket_path}",
-        ]
-        try:
-            self.process = subprocess.Popen(
-                command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as error:
-            raise RuntimeError(f"mpv unavailable: {error}") from error
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            if socket_path.exists():
-                return
-            if self.process.poll() is not None:
-                break
-            time.sleep(0.05)
-        self.stop()
-        raise RuntimeError("mpv IPC socket did not appear")
+        if not shutil_which("mpv"):
+            raise RuntimeError("mpv binary not found in PATH")
+
+        errors = []
+        for audio_device in self._audio_device_candidates():
+            socket_path = self._socket_path()
+            log_path = MPV_SOCKET.parent / "mpv-music.log"
+            command = [
+                "mpv",
+                "--no-config",
+                "--idle=yes",
+                "--vo=null",
+                "--no-video",
+                "--force-window=no",
+                "--really-quiet",
+                "--no-terminal",
+                "--no-input-default-bindings",
+                "--keep-open=no",
+                "--ao=alsa",
+                f"--audio-device={audio_device}",
+                f"--input-ipc-server={socket_path}",
+            ]
+            try:
+                with open(log_path, "wb") as log_file:
+                    self.process = subprocess.Popen(
+                        command, stdout=subprocess.DEVNULL, stderr=log_file)
+            except OSError as error:
+                raise RuntimeError(f"mpv unavailable: {error}") from error
+
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if socket_path.exists():
+                    self.device = audio_device.removeprefix("alsa/")
+                    self.last_error = ""
+                    return
+                if self.process.poll() is not None:
+                    break
+                time.sleep(0.05)
+
+            detail = ""
+            try:
+                detail = log_path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                pass
+            rc = self.process.poll() if self.process else None
+            self.stop()
+            errors.append(
+                f"audio-device={audio_device} rc={rc}"
+                + (f": {detail[:240]}" if detail else ""))
+
+        self.last_error = " | ".join(errors) if errors else "unknown"
+        raise RuntimeError(
+            "mpv IPC socket did not appear. " + self.last_error)
 
     def stop(self):
         if self.process and self.process.poll() is None:
@@ -563,14 +597,12 @@ def run():
     ensure_music_root()
     device = alsa_device()
     print(f"Music player ALSA device: {device}", file=sys.stderr)
-    player = MpvPlayer(device)
-    try:
-        player.start()
-    except RuntimeError as error:
-        print(error, file=sys.stderr)
-        print("Install mpv (alsa-utils recommended).", file=sys.stderr)
+    if not shutil_which("mpv"):
+        print("mpv not found in PATH. Install: sudo apt-get install -y mpv",
+              file=sys.stderr)
         return 1
 
+    player = MpvPlayer(device)
     framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
     input_fd = open_buttons()
     cwd = MUSIC_ROOT
@@ -581,6 +613,10 @@ def run():
     try:
         while running:
             if mode == "now":
+                if not player.active():
+                    mode = "browser"
+                    status = "MPV EXITED"
+                    continue
                 info = player.status()
                 if not info["playing"]:
                     mode = "browser"
@@ -624,20 +660,22 @@ def run():
             elif code == KEY_DOWN:
                 selected = (selected + 1) % len(rows)
             elif code == KEY_LEFT:
-                if player.status()["playing"]:
+                if player.active() and player.status()["playing"]:
                     player.seek(-SEEK_STEP)
                 elif cwd != MUSIC_ROOT:
                     cwd = cwd.parent
                     selected = 0
             elif code == KEY_RIGHT:
-                if player.status()["playing"]:
+                if player.active() and player.status()["playing"]:
                     player.seek(SEEK_STEP)
             elif code == KEY_P:
-                player.prev_track()
+                if player.active():
+                    player.prev_track()
             elif code == KEY_ESC:
-                player.next_track()
+                if player.active():
+                    player.next_track()
             elif code == KEY_5:
-                if player.status()["playing"]:
+                if player.active() and player.status()["playing"]:
                     player.stop_playback()
                     status = "STOPPED"
             elif code == KEY_ENTER:
@@ -665,11 +703,15 @@ def run():
                     except ValueError:
                         tracks = [path]
                         index = 0
-                    if player.play_list(tracks, index):
-                        mode = "now"
-                        status = f"PLAY {path.name}"[:48]
-                    else:
-                        status = "PLAY FAILED"
+                    try:
+                        if player.play_list(tracks, index):
+                            mode = "now"
+                            status = f"PLAY {path.name}"[:48]
+                        else:
+                            status = "PLAY FAILED"
+                    except RuntimeError as error:
+                        print(error, file=sys.stderr)
+                        status = "MPV FAIL (see stderr)"[:48]
     finally:
         player.stop()
         try:

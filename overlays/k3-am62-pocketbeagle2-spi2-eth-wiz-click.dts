@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * DT Overlay for eth-wiz-click (W5500) on PocketBeagle 2 mikroBUS / SPI2.
+ *
+ * https://www.mikroe.com/eth-wiz-click
+ * Copyright (C) 2025 Texas Instruments Incorporated - https://www.ti.com/
+ *
+ * Numeric pin cells so dtc can build without kernel dt-bindings headers.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&{/chosen} {
+	overlays {
+		k3-am62-pocketbeagle2-spi2-eth-wiz-click = "Eth Wiz Click on SPI2";
+	};
+};
+
+&main_pmx0 {
+	techlab_rst_pin: techlab-rst-default-pin {
+		pinctrl-single,pins = <
+			0x01a8 0x200007 /* P1.04 D20 alternate disabled */
+			0x016c 0x020007 /* P1.04 Y18: GPIO0_89 RESET output pull-up */
+		>;
+	};
+
+	techlab_irq_pin: techlab-irq-default-pin {
+		pinctrl-single,pins = <
+			0x015c 0x050007 /* P2.03 AB22: GPIO0_85 INT input */
+			0x019c 0x200007 /* P2.03 B18 alternate disabled */
+		>;
+	};
+
+	techlab_spi_pins: techlab-spi-default-pins {
+		pinctrl-single,pins = <
+			0x01b0 0x010001 /* P1.08 A20: SPI2_CLK */
+			0x01ac 0x010001 /* P1.06 E19: SPI2_CS0 */
+			0x0194 0x050001 /* P1.10 B19: SPI2_D0 MISO */
+			0x0198 0x010001 /* P1.12 A19: SPI2_D1 MOSI */
+			0x0140 0x200007 /* P1.06 AD18 alternate disabled */
+			0x01f0 0x200007 /* P1.10 A18 alternate disabled */
+			0x013c 0x200007 /* P1.12 AE18 alternate disabled */
+		>;
+	};
+};
+
+&main_spi2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&techlab_spi_pins>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	w5500: ethernet@0 {
+		compatible = "wiznet,w5500";
+		pinctrl-names = "default";
+		pinctrl-0 = <&techlab_irq_pin &techlab_rst_pin>;
+		reg = <0x0>;
+		interrupt-parent = <&main_gpio0>;
+		interrupts = <85 2>; /* IRQ_TYPE_EDGE_FALLING */
+		spi-max-frequency = <50000000>;
+		local-mac-address = [00 0a ed aa bb cc];
+	};
+};

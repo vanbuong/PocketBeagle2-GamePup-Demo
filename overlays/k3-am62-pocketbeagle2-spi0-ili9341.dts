@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+/*
+ * Copyright (C) 2022 BeagleBoard.org - https://beagleboard.org/
+ *
+ * ILI9341 on PocketBeagle 2 main_spi0 (GamePup A4 LCD on P2 SPI).
+ * Numeric pin cells so dtc can build without kernel dt-bindings headers.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&{/chosen} {
+	overlays {
+		k3-am62-pocketbeagle2-spi0-ili9341 = "GamePup ILI9341 on SPI0";
+	};
+};
+
+&main_pmx0 {
+	lcd_spi0_pins: lcd-spi0-pins {
+		pinctrl-single,pins = <
+			0x01bc 0x010000 /* P2.29 SPI0_CLK output */
+			0x01c0 0x050000 /* P2.27 SPI0_D0 / MISO input */
+			0x01c4 0x010000 /* P2.25 SPI0_D1 / MOSI output */
+			0x01b4 0x020000 /* P2.31 SPI0_CS0 output pull-up */
+			0x0170 0x200007 /* P2.31A (AA18) alternate pad disabled */
+		>;
+	};
+
+	lcd_display_control_pins: lcd-control-pins {
+		pinctrl-single,pins = <
+			0x0104 0x010007 /* P2.17: LCD D/C, GPIO0_64 output */
+			0x0178 0x010007 /* P2.19: LCD reset, GPIO1_0 output */
+		>;
+	};
+
+	lcd_backlight_pwm_pin: lcd-backlight-pwm-pin {
+		pinctrl-single,pins = <
+			0x01a4 0x010002 /* P2.01 B20: ECAP2 PWM output */
+			0x0160 0x200007 /* P2.01A alternate AM62x pad disabled */
+		>;
+	};
+};
+
+&main_spi0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&lcd_spi0_pins>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	display@0 {
+		compatible = "adafruit,yx240qv29", "ilitek,ili9341";
+		reg = <0>;
+		spi-max-frequency = <25000000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_display_control_pins>;
+		dc-gpios = <&main_gpio0 64 0>;
+		reset-gpios = <&main_gpio1 0 0>;
+		backlight = <&lcd_backlight>;
+		rotation = <270>;
+	};
+};
+
+&ecap2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&lcd_backlight_pwm_pin>;
+};
+
+&{/} {
+	lcd_backlight: lcd-backlight {
+		compatible = "pwm-backlight";
+		pwms = <&ecap2 0 100000 0>;
+		brightness-levels = <0 4 8 16 32 64 96 128 160 192 224 255>;
+		default-brightness-level = <11>;
+	};
+};

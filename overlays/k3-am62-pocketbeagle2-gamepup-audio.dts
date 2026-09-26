@@ -1,0 +1,288 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Portions derived from BBORG_GAMEPUP-00A2.dts:
+ * Copyright (C) 2012 Texas Instruments Incorporated - https://www.ti.com/
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * PocketBeagle 2 GamePup audio + controls overlay.
+ *
+ * Buttons, eye LEDs, PWM buzzer, EC11 encoder, MAX98357A on McASP2.
+ * Display is spi0-ili9341; Click Ethernet is spi2-eth-wiz-click.
+ *
+ * Numeric pin cells so dtc can build without a kernel source tree.
+ */
+
+&{/chosen} {
+	overlays {
+		k3-am62-pocketbeagle2-gamepup-audio = "GamePup audio/controls";
+		gamepup-audio = "max98357-playback-v4-dai-link";
+	};
+};
+
+&main_pmx0 {
+	gamepup_button_pins: gamepup-button-pins {
+		pinctrl-single,pins = <
+			0x00b8 0x064007 /* P2.02: left down, GPIO0_45 pull-up */
+			0x00bc 0x064007 /* P2.04: left right, GPIO0_46 pull-up */
+			0x00c0 0x064007 /* P2.06: left up, GPIO0_47 pull-up */
+			0x00c4 0x064007 /* P2.08: left left, GPIO0_48 pull-up */
+			0x00d8 0x064007 /* P2.18: right down, GPIO0_53 pull-up */
+			0x00c8 0x064007 /* P2.20: right right, GPIO0_49 pull-up */
+			0x0100 0x064007 /* P2.22: right up, GPIO0_63 pull-up */
+			0x00d0 0x064007 /* P2.24: right left, GPIO0_51 pull-up */
+			0x00f0 0x064007 /* P1.31: Select, GPIO0_59 pull-up */
+			0x0168 0x064007 /* P1.35: Start, GPIO0_88 pull-up */
+		>;
+	};
+
+	gamepup_eye_led_pins: gamepup-eye-led-pins {
+		pinctrl-single,pins = <
+			0x00f4 0x010007 /* P2.34 AA21: left eye, GPIO0_60 output */
+			0x00fc 0x010007 /* P1.29 Y20: right eye, GPIO0_62 output */
+		>;
+	};
+
+	gamepup_buzzer_pwm_pin: gamepup-buzzer-pwm-pin {
+		pinctrl-single,pins = <
+			0x01ec 0x010008 /* P1.33 A17: EHRPWM2_B output */
+			0x00e4 0x200007 /* P1.33 alternate AM62x pad disable */
+		>;
+	};
+
+	gamepup_encoder_ab_pins: gamepup-encoder-ab-pins {
+		pinctrl-single,pins = <
+			0x017c 0x060007 /* P1.19: ENC A, GPIO1_1 input pull-up */
+			0x0180 0x060007 /* P1.34: ENC B, GPIO1_2 input pull-up */
+		>;
+	};
+
+	gamepup_encoder_sw_pins: gamepup-encoder-sw-pins {
+		pinctrl-single,pins = <
+			0x01a0 0x060007 /* P1.02 E18: ENC SW, GPIO1_10 input pull-up */
+			0x0164 0x200007 /* P1.02 alternate AM62x pad disabled */
+		>;
+	};
+
+	/*
+	 * McASP2 I2S (SoC bit/frame master), 3.3V peripherals:
+	 * MAX98357A amp: P2.11 BCLK, P2.10 LRCLK, P2.05 DIN (AXR0 TX)
+	 * INMP441 mic SD on P2.07 (AXR1) pinmuxed for later capture.
+	 * MAX98357 SD_MODE on P1.36A (GPIO mute).
+	 */
+	gamepup_mcasp2_pins: gamepup-mcasp2-pins {
+		pinctrl-single,pins = <
+			0x01d8 0x050008 /* P2.05 C15: MCASP2_AXR0 TX (amp DIN) */
+			0x01dc 0x050008 /* P2.07 E15: MCASP2_AXR1 RX (mic SD) */
+			0x0174 0x050002 /* P2.10 AD21: MCASP2_AFSX (LRCLK/WS) */
+			0x01d4 0x050008 /* P2.11 B15: MCASP2_ACLKX (BCLK/SCK) */
+		>;
+	};
+
+	gamepup_max98357_sdmode_pin: gamepup-max98357-sdmode-pin {
+		pinctrl-single,pins = <
+			0x01e8 0x010007 /* P1.36A B17: GPIO1_28 SD_MODE output */
+			0x00e0 0x200007 /* P1.36 V20: alternate pad disabled */
+		>;
+	};
+};
+
+/*
+ * Clear base-tree epwm2-default-pins (claims P1.36 / EHRPWM2_A) and own only
+ * EHRPWM2_B on P1.33 for the buzzer. SD_MODE needs P1.36 as GPIO.
+ */
+&epwm2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&gamepup_buzzer_pwm_pin>;
+};
+
+&main_i2c2 {
+	status = "okay";
+};
+
+&mcasp2 {
+	#sound-dai-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&gamepup_mcasp2_pins>;
+	status = "okay";
+	op-mode = <0>; /* DAVINCI_MCASP_IIS_MODE */
+	tdm-slots = <2>;
+	auxclk-fs-ratio = <256>;
+	/* AXR0 = TX (MAX98357). Remaining serializers inactive. */
+	serial-dir = <
+		1 0 0 0
+		0 0 0 0
+		0 0 0 0
+		0 0 0 0
+	>;
+};
+
+&{/} {
+	gamepup_max98357a: gamepup-max98357a {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+
+	gamepup-max98357-sdmode {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_max98357_sdmode_pin>;
+
+		sdmode {
+			label = "gamepup:max98357-sdmode";
+			gpios = <&main_gpio1 28 0>;
+			default-state = "on";
+		};
+	};
+
+	gamepup_sound: sound-gamepup {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "GamePup-MAX98357";
+		status = "okay";
+
+		simple-audio-card,dai-link {
+			format = "i2s";
+			bitclock-master = <&gamepup_sound_cpu>;
+			frame-master = <&gamepup_sound_cpu>;
+			playback-only;
+
+			gamepup_sound_cpu: cpu {
+				sound-dai = <&mcasp2>;
+				system-clock-direction-out;
+			};
+
+			codec {
+				sound-dai = <&gamepup_max98357a>;
+			};
+		};
+	};
+
+	gamepup-buttons {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_button_pins>;
+		autorepeat;
+
+		left-pad-left {
+			label = "GamePup Left";
+			linux,code = <105>;
+			gpios = <&main_gpio0 48 1>;
+			debounce-interval = <10>;
+		};
+
+		left-pad-right {
+			label = "GamePup Right";
+			linux,code = <106>;
+			gpios = <&main_gpio0 46 1>;
+			debounce-interval = <10>;
+		};
+
+		left-pad-up {
+			label = "GamePup Up";
+			linux,code = <103>;
+			gpios = <&main_gpio0 47 1>;
+			debounce-interval = <10>;
+		};
+
+		left-pad-down {
+			label = "GamePup Down";
+			linux,code = <108>;
+			gpios = <&main_gpio0 45 1>;
+			debounce-interval = <10>;
+		};
+
+		right-pad-left {
+			label = "GamePup P";
+			linux,code = <25>;
+			gpios = <&main_gpio0 51 1>;
+			debounce-interval = <10>;
+		};
+
+		right-pad-right {
+			label = "GamePup Tab";
+			linux,code = <15>;
+			gpios = <&main_gpio0 49 1>;
+			debounce-interval = <10>;
+		};
+
+		right-pad-up {
+			label = "GamePup Esc";
+			linux,code = <1>;
+			gpios = <&main_gpio0 63 1>;
+			debounce-interval = <10>;
+		};
+
+		right-pad-down {
+			label = "GamePup Enter";
+			linux,code = <28>;
+			gpios = <&main_gpio0 53 1>;
+			debounce-interval = <10>;
+		};
+
+		select {
+			label = "GamePup Select";
+			linux,code = <6>;
+			gpios = <&main_gpio0 59 1>;
+			debounce-interval = <10>;
+		};
+
+		start {
+			label = "GamePup Start";
+			linux,code = <2>;
+			gpios = <&main_gpio0 88 1>;
+			debounce-interval = <10>;
+		};
+	};
+
+	gamepup-eye-leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_eye_led_pins>;
+
+		left-eye {
+			label = "gamepup:left-eye";
+			gpios = <&main_gpio0 60 0>;
+			default-state = "off";
+		};
+
+		right-eye {
+			label = "gamepup:right-eye";
+			gpios = <&main_gpio0 62 0>;
+			default-state = "off";
+		};
+	};
+
+	gamepup-buzzer {
+		compatible = "pwm-beeper";
+		pwms = <&epwm2 1 250000 0>;
+	};
+
+	gamepup_encoder: gamepup-encoder {
+		compatible = "rotary-encoder";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_encoder_ab_pins>;
+		gpios = <&main_gpio1 1 1>, <&main_gpio1 2 1>;
+		linux,axis = <7>; /* REL_DIAL */
+		rotary-encoder,relative-axis;
+		rotary-encoder,steps-per-period = <4>;
+		rotary-encoder,encoding = "gray";
+	};
+
+	gamepup-encoder-button {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_encoder_sw_pins>;
+
+		button {
+			label = "gamepup-encoder";
+			gpios = <&main_gpio1 10 1>;
+			linux,code = <28>; /* KEY_ENTER */
+			debounce-interval = <10>;
+		};
+	};
+};
