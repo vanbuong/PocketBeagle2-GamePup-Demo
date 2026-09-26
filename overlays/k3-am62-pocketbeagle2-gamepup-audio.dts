@@ -91,13 +91,14 @@
 };
 
 /*
- * Clear base-tree epwm2-default-pins (claims P1.36 / EHRPWM2_A) and own only
- * EHRPWM2_B on P1.33 for the buzzer. SD_MODE needs P1.36 as GPIO.
+ * Clear base-tree epwm2-default-pins (claims P1.36 / EHRPWM2_A). The buzzer
+ * node owns EHRPWM2_B on P1.33; SD_MODE needs P1.36 as GPIO1_28.
+ * See PB2_BASE_TREE_EPWM2_P1_36_BUG.md.
  */
 &epwm2 {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&gamepup_buzzer_pwm_pin>;
+	pinctrl-0 = <>;
 };
 
 &main_i2c2 {
@@ -259,7 +260,10 @@
 
 	gamepup-buzzer {
 		compatible = "pwm-beeper";
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_buzzer_pwm_pin>;
 		pwms = <&epwm2 1 250000 0>;
+		status = "okay";
 	};
 
 	gamepup_encoder: gamepup-encoder {

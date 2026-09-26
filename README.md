@@ -62,8 +62,19 @@ cat /proc/device-tree/bus@f0000/audio-controller@2b20000/status
 aplay -l
 # Expect: card 0: GamePupMAX98357 [GamePup-MAX98357]
 
-# PWM buzzer (menu beeps):
-ls -l /dev/input/by-path/platform-gamepup-buzzer-event
+# PWM buzzer (menu beeps) — need an input device:
+ls -l /dev/input/by-path/*buzzer* /dev/input/by-path/*beeper* 2>/dev/null
+cat /proc/device-tree/gamepup-buzzer/compatible
+# epwm2 must be live; P1.33 should be EHRPWM2_B:
+ls /sys/bus/platform/drivers/pwm-beeper/ 2>/dev/null
+ls /sys/class/pwm/
+dmesg | grep -iE 'beeper|buzzer|epwm2|23020000' | tail
+```
+
+If the buzzer node is missing, rebuild/reinstall
+`overlays/k3-am62-pocketbeagle2-gamepup-audio.dtbo` (epwm2 `pinctrl-0 = <>`,
+buzzer owns the P1.33 pinmux) and reboot. Menu beeps are skipped when
+`/opt/gamepup/saves/menu-beeps-muted` or `audio-muted` exists.
 ```
 
 SD_MODE is held high by a `gpio-leds` hog on P1.36 (`gamepup:max98357-sdmode`).

@@ -2,3 +2,9 @@
 # GamePup / Click peripherals. LCD uses DRM on SPI0; Eth Wiz uses the W5500
 # driver on SPI2. Keep spi group access for any leftover spidev nodes.
 SUBSYSTEM=="spidev", GROUP="spi", MODE="0660"
+
+# Menu beeps / hardware test write EV_SND to the pwm-beeper input device.
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="gamepup-buzzer", \
+	GROUP="input", MODE="0660", TAG+="uaccess"
+KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="pwm-beeper", \
+	GROUP="input", MODE="0660", TAG+="uaccess"
