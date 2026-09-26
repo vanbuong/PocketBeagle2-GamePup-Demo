@@ -244,6 +244,13 @@ else
 	echo "No extlinux.conf found; install dtbos manually from $OVERLAY_DIR" >&2
 fi
 
+install -d -m 0755 /etc/modules-load.d
+install -m 0644 "$SCRIPT_DIR/emulator/gamepup-alsa.conf" \
+	/etc/modules-load.d/gamepup-alsa.conf
+modprobe snd-soc-davinci-mcasp 2>/dev/null || true
+modprobe snd-soc-max98357a 2>/dev/null || true
+modprobe snd-soc-simple-card 2>/dev/null || true
+
 modprobe drm_mipi_dbi
 modprobe ili9341
 
