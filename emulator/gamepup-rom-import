@@ -138,14 +138,38 @@ def import_file(path: Path, owner_uid: int, owner_gid: int,
         totals["rejected"] += 1
 
 
-def write_status(lines: list[str]) -> None:
+def device_account():
+    """Owner of /opt/gamepup, not a hardcoded login name."""
+    try:
+        owner = os.stat("/opt/gamepup").st_uid
+        if owner >= 1000:
+            return pwd.getpwuid(owner)
+    except (OSError, KeyError):
+        pass
+    for entry in pwd.getpwall():
+        if entry.pw_uid >= 1000 and entry.pw_name != "nobody":
+            return entry
+    raise RuntimeError("no device user for imported ROMs")
+
+
+def write_status(lines: list[str], account) -> None:
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = STATUS_FILE.with_suffix(".tmp")
     temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    account = pwd.getpwnam("beagle")
     os.chown(temporary, account.pw_uid, account.pw_gid)
     os.chmod(temporary, 0o644)
     os.replace(temporary, STATUS_FILE)
+
+
+def detach_lun() -> None:
+    """Close the backing file even if Windows left medium-removal prevented."""
+    forced = LUN_FILE.parent / "forced_eject"
+    if forced.exists():
+        try:
+            forced.write_text("1\n", encoding="ascii")
+        except OSError as error:
+            print(f"forced_eject: {error}", file=sys.stderr)
+    LUN_FILE.write_text("\n", encoding="ascii")
 
 
 def run_checked(arguments: list[str], accepted: tuple[int, ...] = (0,)) -> None:
@@ -175,10 +199,10 @@ def main() -> int:
         mounted = False
         detached = False
         try:
-            # The UI asks the user to eject first. Clearing the LUN here also
-            # makes the operation deterministic on hosts that keep the path set.
+            # Windows often unmounts without clearing lun.0/file. forced_eject
+            # drops that prevent-removal lock so Linux can mount the image.
             os.sync()
-            LUN_FILE.write_text("\n", encoding="ascii")
+            detach_lun()
             detached = True
             time.sleep(0.5)
             run_checked(["fsck.vfat", "-a", str(IMAGE)], accepted=(0, 1))
@@ -187,7 +211,7 @@ def main() -> int:
                          str(IMAGE), str(MOUNTPOINT)])
             mounted = True
 
-            account = pwd.getpwnam("beagle")
+            account = device_account()
             for path in sorted(MOUNTPOINT.rglob("*"),
                                key=lambda item: str(item).casefold()):
                 if path.is_file() and not path.name.startswith("._"):
@@ -198,13 +222,16 @@ def main() -> int:
                 f"{name.upper()} {totals[name]}"
                 for name in ("imported", "replaced", "unchanged", "rejected")
             ]
-            write_status(result)
+            write_status(result, account)
             print("\n".join(result))
             return 0
         except Exception as error:
             message = re.sub(r"\s+", " ", str(error)).strip()[:120]
             result = ["RESULT ERROR", f"MESSAGE {message or 'IMPORT FAILED'}"]
-            write_status(result)
+            try:
+                write_status(result, device_account())
+            except Exception:
+                pass
             print("\n".join(result))
             return 1
         finally:

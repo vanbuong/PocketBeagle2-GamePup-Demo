@@ -237,7 +237,8 @@ printf '%s\n' "$DEV_MAC" > functions/ncm.usb0/dev_addr
 printf '%s\n' "$HOST_MAC" > functions/ncm.usb0/host_addr
 mkdir -p functions/acm.usb0
 mkdir -p functions/mass_storage.roms
-printf '1\n' > functions/mass_storage.roms/stall
+# stall=1 makes Windows drop the volume without the gadget closing lun.0/file.
+printf '0\n' > functions/mass_storage.roms/stall
 printf '1\n' > functions/mass_storage.roms/lun.0/removable
 printf '0\n' > functions/mass_storage.roms/lun.0/ro
 printf '0\n' > functions/mass_storage.roms/lun.0/cdrom

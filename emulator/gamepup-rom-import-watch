@@ -1,18 +1,83 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
-# Import the ROM inbox when the host safely ejects the removable USB LUN.
+# Import the ROM inbox after the host ejects the GAMEPUP volume.
+#
+# Linux and macOS clear lun.0/file on eject. Windows usually unmounts the
+# FAT volume and leaves the backing file open, so the watcher also starts
+# an import on the dirty-to-clean transition of that volume.
 
 set -u
 
+IMAGE=/var/lib/gamepup-rom-drive/gamepup-roms.img
 LUN_FILE=/sys/kernel/config/usb_gadget/pb2/functions/mass_storage.roms/lun.0/file
 UDC_FILE=/sys/kernel/config/usb_gadget/pb2/UDC
 IMPORTER=/usr/local/libexec/gamepup-rom-import
 
+# 0 = clean unmount, 1 = mounted/dirty, 2 = unreadable
+volume_state() {
+	python3 - "$IMAGE" <<'PY'
+import os, struct, sys
+path = sys.argv[1]
+try:
+    fd = os.open(path, os.O_RDWR)
+except OSError:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        sys.exit(2)
+try:
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    boot = os.read(fd, 512)
+    if len(boot) < 90 or boot[0x52:0x57] != b"FAT32":
+        sys.exit(2)
+    bytes_per_sector = struct.unpack_from("<H", boot, 0x0B)[0]
+    reserved = struct.unpack_from("<H", boot, 0x0E)[0]
+    if bytes_per_sector < 512 or reserved < 1:
+        sys.exit(2)
+    os.lseek(fd, reserved * bytes_per_sector + 4, os.SEEK_SET)
+    fat1 = struct.unpack("<I", os.read(fd, 4))[0]
+finally:
+    os.close(fd)
+# FAT32 bit 31 set means the host unmounted cleanly.
+sys.exit(0 if fat1 & 0x80000000 else 1)
+PY
+}
+
+gadget_up() {
+	[ -r "$LUN_FILE" ] && [ -r "$UDC_FILE" ] &&
+		[ -n "$(cat "$UDC_FILE" 2>/dev/null)" ]
+}
+
+seen_dirty=0
+# Import once at start if the volume is already clean. That is the Windows
+# case where eject already happened and lun.0/file was never cleared.
+boot_checked=0
+
 while :; do
-	if [ -r "$LUN_FILE" ] && [ -r "$UDC_FILE" ] && \
-		[ -n "$(cat "$UDC_FILE" 2>/dev/null)" ] && \
-		[ -z "$(cat "$LUN_FILE" 2>/dev/null)" ]; then
-		"$IMPORTER" || true
+	if gadget_up; then
+		lun=$(cat "$LUN_FILE" 2>/dev/null || true)
+		if [ -z "$lun" ]; then
+			"$IMPORTER" || true
+			seen_dirty=0
+			boot_checked=1
+		else
+			volume_state
+			state=$?
+			if [ "$state" -eq 1 ]; then
+				seen_dirty=1
+				boot_checked=1
+			elif [ "$state" -eq 0 ] && { [ "$seen_dirty" -eq 1 ] ||
+				[ "$boot_checked" -eq 0 ]; }; then
+				"$IMPORTER" || true
+				seen_dirty=0
+				boot_checked=1
+			else
+				boot_checked=1
+			fi
+		fi
 	fi
 	sleep 1
 done

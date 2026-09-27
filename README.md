@@ -404,8 +404,10 @@ To install games from macOS, Windows, or Linux:
 
 1. Drag supported files into the `GAMEPUP` drive.
 2. Safely eject the drive on the computer.
-3. GamePup automatically validates and imports the files, then reconnects the
-   USB drive. The running menu refreshes its game counts without a reboot.
+3. GamePup imports the files and reconnects the USB drive. The running menu
+   refreshes its game counts without a reboot. Windows often unmounts without
+   clearing the gadget backing file; the watcher then treats a clean FAT
+   volume as the eject and closes that file itself.
 
 The importer accepts `.nes`, `.gb`, `.gbc`, `.z64`, `.n64`, `.v64`, `.wad`,
 `.gif`, and ZIP archives containing those formats. It checks basic file headers,
