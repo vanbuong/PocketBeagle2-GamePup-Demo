@@ -1,4 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
+# install.sh rewrites the "beagle" lines to DEVICE_USER.
 beagle ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-rom-import
 beagle ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-fbcon
 beagle ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-backlight-permissions
+# The menu service puts its user in group video. Match that group so a
+# login other than "beagle" can grant backlight access without a password.
+%video ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-fbcon
+%video ALL=(root) NOPASSWD: /usr/local/libexec/gamepup-backlight-permissions

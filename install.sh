@@ -154,6 +154,7 @@ udevadm control --reload-rules
 udevadm trigger --subsystem-match=spidev
 udevadm trigger --subsystem-match=i2c-dev
 udevadm trigger --subsystem-match=input
+udevadm trigger --subsystem-match=backlight
 
 install -d -m 0755 /usr/local/bin /usr/local/libexec /usr/local/sbin
 # Khronos headers are vendored under emulator/khronos so we never need Mesa
@@ -206,6 +207,8 @@ install -m 0755 "$SCRIPT_DIR/emulator/gamepup-menu" \
 	/usr/local/bin/gamepup-menu
 install -m 0755 "$SCRIPT_DIR/emulator/gamepup-hardware-test" \
 	/usr/local/bin/gamepup-hardware-test
+install -m 0755 "$SCRIPT_DIR/emulator/gamepup-buzzer-test" \
+	/usr/local/bin/gamepup-buzzer-test
 install -m 0755 "$SCRIPT_DIR/emulator/gamepup-rom-import" \
 	/usr/local/libexec/gamepup-rom-import
 install -m 0755 "$SCRIPT_DIR/emulator/gamepup-rom-drive-setup" \
@@ -248,6 +251,8 @@ usermod -a -G video,render,input,spi,i2c "$DEVICE_USER" 2>/dev/null || \
 	usermod -a -G video,input,spi,i2c "$DEVICE_USER" 2>/dev/null || true
 /usr/local/libexec/gamepup-rom-drive-setup
 systemctl daemon-reload
+udevadm control --reload-rules
+udevadm trigger --subsystem-match=backlight
 # Stock BeagleBoard NCM-only gadgets claim the USB device controller; GamePup
 # needs the same UDC for NCM + ACM + the GAMEPUP mass-storage inbox.
 for _gadget_unit in bb-usb-gadgets.service usb-gadget.service gadget-init.service; do

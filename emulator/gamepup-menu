@@ -122,17 +122,25 @@ def backlight_path() -> Path | None:
     return None
 
 
-def grant_backlight_access() -> None:
-    for command in (
-        ["sudo", "-n", BACKLIGHT_PERMISSIONS, "grant"],
-        [BACKLIGHT_PERMISSIONS, "grant"],
-    ):
+def run_root_helper(args) -> bool:
+    """Run a libexec helper directly, or through passwordless sudo."""
+    for command in (["sudo", "-n", *args], list(args)):
         try:
-            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-            return
+            result = subprocess.run(
+                command, check=False, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
         except OSError:
             continue
+        if result.returncode == 0:
+            return True
+    return False
+
+
+def grant_backlight_access() -> None:
+    if run_root_helper([BACKLIGHT_PERMISSIONS, "grant"]):
+        return
+    print("Backlight grant failed. sudo requires a password for "
+          f"{BACKLIGHT_PERMISSIONS}", file=sys.stderr)
 
 
 def read_fb_info(framebuffer: int) -> dict:
@@ -811,16 +819,9 @@ def toggle_setting(path: Path):
 def claim_display() -> None:
     """Keep Linux fbcon/TTY from painting over the GamePup framebuffer."""
     grant_backlight_access()
-    for command in (
-        ["sudo", "-n", FBCON, "detach"],
-        [FBCON, "detach"],
-    ):
-        try:
-            subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-            return
-        except OSError:
-            continue
+    if not run_root_helper([FBCON, "detach"]):
+        print(f"fbcon detach failed. sudo requires a password for {FBCON}",
+              file=sys.stderr)
 
 
 def open_buttons() -> int:

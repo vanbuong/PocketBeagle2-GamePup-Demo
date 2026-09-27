@@ -69,6 +69,11 @@ cat /proc/device-tree/gamepup-buzzer/compatible
 ls /sys/bus/platform/drivers/pwm-beeper/ 2>/dev/null
 ls /sys/class/pwm/
 dmesg | grep -iE 'beeper|buzzer|epwm2|23020000' | tail
+
+# Standalone beep, no screen. Same EV_SND path the menu uses:
+gamepup-buzzer-test
+# Skip pwm-beeper and toggle epwm2 channel B directly (needs root):
+sudo gamepup-buzzer-test --pwm
 ```
 
 If the buzzer node is missing, rebuild/reinstall

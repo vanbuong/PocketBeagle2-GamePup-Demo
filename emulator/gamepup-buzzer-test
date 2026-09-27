@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Standalone PWM buzzer test. No framebuffer and no button grab.
+
+Menu UI beeps use this same input device (EV_SND / SND_TONE on the
+pwm-beeper node). They do not go out the MAX98357. This test ignores
+the menu mute files so a muted menu can still be compared with the
+hardware.
+"""
+
+import argparse
+import mmap
+import os
+from pathlib import Path
+import signal
+import struct
+import subprocess
+import sys
+import time
+
+
+BUZZER_CANDIDATES = (
+    "/dev/input/by-path/platform-gamepup-buzzer-event",
+    "/dev/input/by-path/platform-pwm-beeper-event",
+)
+MUTE_FILES = (
+    Path("/opt/gamepup/saves/audio-muted"),
+    Path("/opt/gamepup/saves/menu-beeps-muted"),
+)
+# Same layout as gamepup-menu / gamepup-hardware-test.
+EVENT = struct.Struct("@llHHi")
+EV_SND = 0x12
+SND_TONE = 2
+# DT requests epwm2 channel B: pwms = <&epwm2 1 250000 0>
+EPWM_CHANNEL = 1
+# P1.33 padconfig at 0x000F41EC. 0x00010008 is the live EHRPWM2_B mux.
+PAD_PAGE = 0x000F4000
+PAD_OFFSET = 0x1EC
+PWM_MUX = 0x00010008
+GPIO_MUX = 0x00010007
+# GPIO1 line 29 is the GPIO function of that same pad.
+GPIO1_PAGE = 0x00601000
+GPIO_LINE = 29
+GPIO_DIR = 0x10
+GPIO_SET = 0x18
+GPIO_CLR = 0x1C
+BEEPER_DRIVER = Path("/sys/bus/platform/drivers/pwm-beeper")
+
+_fd = -1
+_pwm_dir = None
+
+
+def resolve_buzzer_path():
+    for candidate in BUZZER_CANDIDATES:
+        if os.path.exists(candidate):
+            return candidate
+    by_path = Path("/dev/input/by-path")
+    if by_path.is_dir():
+        for pattern in ("*buzzer*", "*pwm-beeper*", "*pwm_beeper*"):
+            matches = sorted(by_path.glob(pattern))
+            if matches:
+                return str(matches[0])
+    for name_path in Path("/sys/class/input").glob("event*/device/name"):
+        try:
+            name = name_path.read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        lowered = name.casefold()
+        if name in ("gamepup-buzzer", "pwm-beeper") or "buzzer" in lowered \
+                or "beeper" in lowered:
+            return f"/dev/input/{name_path.parent.parent.name}"
+    return None
+
+
+def dt_string(path: Path) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return f"(unreadable: {error})"
+    return data.split(b"\0", 1)[0].decode("ascii", "replace") or "(empty)"
+
+
+def section(title: str):
+    print(f"\n== {title}")
+
+
+def report(buzzer_path):
+    section("menu")
+    print("Menu beeps write EV_SND/SND_TONE to the pwm-beeper input device.")
+    print("They do not use the MAX98357 / ALSA card.")
+    for path in MUTE_FILES:
+        state = "PRESENT — menu will not beep" if path.exists() else "absent"
+        print(f"  {path}: {state}")
+
+    section("device tree")
+    node = Path("/proc/device-tree/gamepup-buzzer")
+    print(f"  {node}: {'present' if node.is_dir() else 'MISSING'}")
+    if node.is_dir():
+        print(f"  compatible: {dt_string(node / 'compatible')}")
+        print(f"  status: {dt_string(node / 'status')}")
+    epwm = Path("/proc/device-tree/bus@f0000/pwm@23020000/status")
+    if not epwm.exists():
+        matches = list(Path("/proc/device-tree").glob("**/*23020000*/status"))
+        epwm = matches[0] if matches else epwm
+    print(f"  epwm2 status file: {epwm}")
+    print(f"  epwm2 status: {dt_string(epwm) if epwm.exists() else 'MISSING'}")
+
+    section("input device")
+    print(f"  resolved: {buzzer_path or 'NONE'}")
+    print(f"  input_event size: {EVENT.size} bytes "
+          "(24 on aarch64, 16 on 32-bit)")
+    if buzzer_path:
+        try:
+            st = os.stat(buzzer_path)
+            print(f"  mode: {st.st_mode & 0o777:o} uid={st.st_uid} gid={st.st_gid}")
+        except OSError as error:
+            print(f"  stat: {error}")
+        name_path = None
+        try:
+            real = Path(os.path.realpath(buzzer_path))
+            name_path = Path(f"/sys/class/input/{real.name}/device/name")
+        except OSError:
+            pass
+        if name_path and name_path.exists():
+            print(f"  name: {name_path.read_text(encoding='ascii').strip()}")
+
+    section("pwm chips")
+    pwm_root = Path("/sys/class/pwm")
+    if not pwm_root.is_dir():
+        print("  /sys/class/pwm missing")
+    else:
+        chips = sorted(pwm_root.glob("pwmchip*"))
+        if not chips:
+            print("  no pwmchip")
+        for chip in chips:
+            try:
+                target = os.path.realpath(chip / "device")
+            except OSError:
+                target = "?"
+            npwm = "?"
+            try:
+                npwm = (chip / "npwm").read_text(encoding="ascii").strip()
+            except OSError:
+                pass
+            print(f"  {chip.name} npwm={npwm} -> {target}")
+
+    section("kernel log")
+    lines = kernel_lines()
+    if not lines:
+        print("  no beeper/buzzer/epwm2 lines")
+    else:
+        for line in lines[-12:]:
+            print(f"  {line}")
+
+
+def silence(*_args):
+    if _fd >= 0:
+        try:
+            os.write(_fd, EVENT.pack(0, 0, EV_SND, SND_TONE, 0))
+        except OSError:
+            pass
+    if _pwm_dir is not None:
+        try:
+            (_pwm_dir / "enable").write_text("0\n", encoding="ascii")
+        except OSError:
+            pass
+    if _args:
+        print("\nstopped")
+        raise SystemExit(130)
+
+
+def ensure_debugfs():
+    pwm = Path("/sys/kernel/debug/pwm")
+    if pwm.exists():
+        return True
+    try:
+        subprocess.run(
+            ["mount", "-t", "debugfs", "none", "/sys/kernel/debug"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2,
+            check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return pwm.exists()
+
+
+def matching_lines(path: Path, needles):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        return [f"(cannot read {path}: {error})"]
+    hits = []
+    lowered = [needle.casefold() for needle in needles]
+    for line in text.splitlines():
+        folded = line.casefold()
+        if any(needle in folded for needle in lowered):
+            hits.append(line.rstrip())
+    return hits
+
+
+def dump_pwm_and_pin():
+    """Read hardware state while a tone is requested."""
+    section("while tone is requested")
+    if not ensure_debugfs():
+        print("  debugfs is not mounted (re-run with sudo)")
+        return
+    pwm = Path("/sys/kernel/debug/pwm")
+    hits = matching_lines(pwm, ("23020000", "pwm-1", "pwm-0", "beeper", "buzzer"))
+    print(f"  {pwm}:")
+    if hits:
+        for line in hits:
+            print(f"    {line}")
+    else:
+        print("    no epwm2 lines")
+    for status in (
+            Path("/sys/devices/platform/gamepup-buzzer/power/runtime_status"),
+            Path("/sys/devices/platform/bus@f0000/23020000.pwm/power/runtime_status"),
+    ):
+        try:
+            print(f"  {status}: {status.read_text(encoding='ascii').strip()}")
+        except OSError as error:
+            print(f"  {status}: {error}")
+    clk = Path("/sys/kernel/debug/clk/clk_summary")
+    hits = matching_lines(clk, ("ehrpwm", "epwm", "23020000", "tbclk"))
+    print(f"  {clk}:")
+    if hits:
+        for line in hits[:16]:
+            print(f"    {line}")
+    else:
+        print("    no ehrpwm/tbclk lines")
+    root = Path("/sys/kernel/debug/pinctrl")
+    if not root.is_dir():
+        print("  pinctrl debugfs missing")
+        return
+    for pins in sorted(root.glob("*/pinmux-pins")):
+        hits = matching_lines(
+            pins, ("pin 123", "pin 122", "buzzer", "23020000", "01ec", "01e8"))
+        if not hits:
+            continue
+        print(f"  {pins}:")
+        for line in hits:
+            print(f"    {line}")
+    for pins in sorted(root.glob("*/pins")):
+        hits = matching_lines(pins, ("pin 123 ", "pin 122 "))
+        if not hits:
+            continue
+        print(f"  {pins}:")
+        for line in hits:
+            print(f"    {line}")
+
+
+def kernel_lines():
+    try:
+        log = subprocess.check_output(
+            ["dmesg"], text=True, stderr=subprocess.DEVNULL, timeout=2)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        return [f"dmesg unavailable: {error}"]
+    needles = ("beeper", "buzzer", "epwm", "23020000", "ehrpwm", "tbclk", "period value")
+    return [
+        line for line in log.splitlines()
+        if any(token in line.casefold() for token in needles)
+    ]
+
+
+def play_input(path: str, tones, nonblock: bool) -> bool:
+    """tones is a list of (hz, seconds). The fd stays open for the whole sequence.
+
+    pwm-beeper applies the tone from a workqueue and stops the PWM when the
+    last userspace fd closes, so closing between notes can cancel a beep.
+    nonblock matches gamepup-menu, which opens with O_NONBLOCK.
+    """
+    global _fd
+    flags = os.O_WRONLY | os.O_CLOEXEC
+    if nonblock:
+        flags |= os.O_NONBLOCK
+    fd = -1
+    try:
+        fd = os.open(path, flags)
+        _fd = fd
+        observed = False
+        for frequency, duration in tones:
+            os.write(fd, EVENT.pack(0, 0, EV_SND, SND_TONE, int(frequency)))
+            print(f"  wrote SND_TONE {int(frequency)} Hz for {duration:.3f}s")
+            # pwm-beeper enables the timer from a workqueue. Sample after it runs.
+            hold = min(0.25, duration) if duration else 0.25
+            time.sleep(hold)
+            if not observed and frequency:
+                dump_pwm_and_pin()
+                observed = True
+            remain = duration - hold
+            if remain > 0:
+                time.sleep(remain)
+        if not observed:
+            dump_pwm_and_pin()
+        os.write(fd, EVENT.pack(0, 0, EV_SND, SND_TONE, 0))
+        time.sleep(0.05)
+        return True
+    except OSError as error:
+        print(f"  input write failed on {path}: {error}")
+        return False
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            _fd = -1
+
+
+def find_epwm_chip():
+    root = Path("/sys/class/pwm")
+    if not root.is_dir():
+        return None
+    chips = []
+    for chip in sorted(root.glob("pwmchip*")):
+        try:
+            target = os.path.realpath(chip / "device")
+        except OSError:
+            target = ""
+        chips.append((chip, target))
+        lowered = target.casefold()
+        if "23020000" in lowered or "epwm@23020000" in lowered or "epwm2" in lowered:
+            return chip
+    if len(chips) == 1:
+        print(f"  only one pwmchip ({chips[0][0].name}); using it")
+        return chips[0][0]
+    return None
+
+
+def play_sysfs(tones):
+    """Return 'ok', 'busy' (pwm-beeper holds the channel), or 'fail'."""
+    global _pwm_dir
+    chip = find_epwm_chip()
+    if chip is None:
+        print("  no epwm2 pwmchip under /sys/class/pwm")
+        return "fail"
+    channel = EPWM_CHANNEL
+    try:
+        npwm = int((chip / "npwm").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        npwm = 2
+    if channel >= npwm:
+        channel = 0
+    pwm = chip / f"pwm{channel}"
+    exported = False
+    try:
+        if not pwm.is_dir():
+            (chip / "export").write_text(f"{channel}\n", encoding="ascii")
+            exported = True
+        _pwm_dir = pwm
+        for frequency, duration in tones:
+            if frequency <= 0:
+                (pwm / "enable").write_text("0\n", encoding="ascii")
+                time.sleep(duration)
+                continue
+            period = max(1, int(1_000_000_000 / int(frequency)))
+            duty = period // 2
+            # duty must not exceed the current period while it is being changed
+            try:
+                (pwm / "duty_cycle").write_text("0\n", encoding="ascii")
+            except OSError:
+                pass
+            (pwm / "period").write_text(f"{period}\n", encoding="ascii")
+            (pwm / "duty_cycle").write_text(f"{duty}\n", encoding="ascii")
+            (pwm / "enable").write_text("1\n", encoding="ascii")
+            print(f"  sysfs {chip.name}/pwm{channel} {int(frequency)} Hz "
+                  f"period={period}ns for {duration:.3f}s")
+            for name in ("period", "duty_cycle", "enable"):
+                try:
+                    value = (pwm / name).read_text(encoding="ascii").strip()
+                except OSError as error:
+                    value = str(error)
+                print(f"    {name}={value}")
+            time.sleep(duration)
+        (pwm / "enable").write_text("0\n", encoding="ascii")
+        return "ok"
+    except OSError as error:
+        err = getattr(error, "errno", None)
+        print(f"  sysfs PWM failed on {chip}/pwm{channel}: {error}")
+        if err == 16:
+            print("  pwm-beeper already owns this channel")
+            return "busy"
+        if err in (1, 13):
+            print("  run this test as root to export the PWM channel")
+        return "fail"
+    finally:
+        _pwm_dir = None
+        if exported:
+            try:
+                (chip / "unexport").write_text(f"{channel}\n", encoding="ascii")
+            except OSError:
+                pass
+
+
+def map_page(phys: int):
+    fd = os.open("/dev/mem", os.O_RDWR | os.O_SYNC)
+    try:
+        return fd, mmap.mmap(fd, 0x1000, mmap.MAP_SHARED,
+                             mmap.PROT_READ | mmap.PROT_WRITE, offset=phys)
+    except OSError:
+        os.close(fd)
+        raise
+
+
+def read_u32(mem, offset: int) -> int:
+    return struct.unpack_from("<I", mem, offset)[0]
+
+
+def write_u32(mem, offset: int, value: int):
+    struct.pack_into("<I", mem, offset, value & 0xFFFFFFFF)
+
+
+def sysfs_text(path: Path, text: str, timeout=2.0):
+    """Write sysfs from a child so a stuck driver can be timed out."""
+    try:
+        proc = subprocess.run(
+            ["tee", str(path)], input=text, text=True, timeout=timeout,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+    except subprocess.TimeoutExpired:
+        return "timed out"
+    if proc.returncode != 0:
+        return (proc.stderr or "").strip() or f"exit {proc.returncode}"
+    return None
+
+
+def beeper_name():
+    skip = {"bind", "unbind", "uevent", "module", "new_id", "remove_id"}
+    if BEEPER_DRIVER.is_dir():
+        for entry in BEEPER_DRIVER.iterdir():
+            if entry.name not in skip and entry.is_symlink():
+                return entry.name
+    return "gamepup-buzzer"
+
+
+def bitbang_gpio(mem, seconds: float, hz: int):
+    mask = 1 << GPIO_LINE
+    direction = read_u32(mem, GPIO_DIR)
+    write_u32(mem, GPIO_DIR, direction & ~mask)
+    half = 1.0 / (2 * max(1, hz))
+    end = time.perf_counter() + seconds
+    high = True
+    while time.perf_counter() < end:
+        write_u32(mem, GPIO_SET if high else GPIO_CLR, mask)
+        high = not high
+        target = time.perf_counter() + half
+        while time.perf_counter() < target:
+            pass
+    write_u32(mem, GPIO_CLR, mask)
+    write_u32(mem, GPIO_DIR, direction | mask)
+
+
+def play_raw(hz: int, ms: int) -> int:
+    """Unbind pwm-beeper and drive P1.33 as PWM, then as GPIO."""
+    section("direct pin test")
+    if os.geteuid() != 0:
+        print("  re-run with sudo so the beeper can be unbound")
+        return 1
+    name = beeper_name()
+    print(f"  unbinding {name}")
+    error = sysfs_text(BEEPER_DRIVER / "unbind", name + "\n")
+    if error:
+        print(f"  unbind failed: {error}")
+        print("  pwm-beeper did not release epwm2")
+        return 1
+    pad_fd = gpio_fd = None
+    try:
+        pad_fd, pad = map_page(PAD_PAGE)
+        original = read_u32(pad, PAD_OFFSET)
+        print(f"  pad 0x{PAD_PAGE + PAD_OFFSET:08x} = 0x{original:08x} after unbind")
+        if original != PWM_MUX:
+            write_u32(pad, PAD_OFFSET, PWM_MUX)
+            print(f"  restored PWM mux 0x{PWM_MUX:08x}")
+        print("  listen: epwm2 channel B via sysfs")
+        sysfs_ok = play_sysfs(((hz, ms / 1000.0),)) == "ok"
+        print("  listen: GPIO1_29 toggle")
+        write_u32(pad, PAD_OFFSET, GPIO_MUX)
+        print(f"  pad now 0x{read_u32(pad, PAD_OFFSET):08x}")
+        try:
+            gpio_fd, gpio = map_page(GPIO1_PAGE)
+            bitbang_gpio(gpio, ms / 1000.0, hz)
+            gpio_ok = True
+            print("  GPIO toggle finished")
+        except OSError as gpio_error:
+            gpio_ok = False
+            print(f"  GPIO map failed: {gpio_error}")
+        write_u32(pad, PAD_OFFSET, original)
+        print(f"  pad restored to 0x{original:08x}")
+        return 0 if sysfs_ok or gpio_ok else 1
+    except OSError as map_error:
+        print(f"  /dev/mem failed: {map_error}")
+        print("  listen: epwm2 channel B via sysfs")
+        return 0 if play_sysfs(((hz, ms / 1000.0),)) == "ok" else 1
+    finally:
+        if gpio_fd is not None:
+            os.close(gpio_fd)
+        if pad_fd is not None:
+            os.close(pad_fd)
+        rebound = sysfs_text(BEEPER_DRIVER / "bind", name + "\n")
+        print(f"  rebind {name}: {rebound or 'ok'}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Beep the GamePup PWM buzzer without the menu or display.")
+    parser.add_argument("--hz", type=int, default=880,
+                        help="tone frequency (default 880)")
+    parser.add_argument("--ms", type=int, default=400,
+                        help="tone length in milliseconds (default 400)")
+    parser.add_argument("--menu", action="store_true",
+                        help="play the menu 'select' beeps (988 Hz then 1319 Hz)")
+    parser.add_argument("--pwm", action="store_true",
+                        help="try epwm2 sysfs; if pwm-beeper owns it, beep that way")
+    parser.add_argument("--raw", action="store_true",
+                        help="unbind pwm-beeper and drive P1.33 as PWM, then GPIO")
+    parser.add_argument("--input", action="store_true",
+                        help="use only the pwm-beeper input device")
+    args = parser.parse_args()
+    if args.hz < 0 or args.ms < 0:
+        print("hz and ms must be >= 0", file=sys.stderr)
+        return 2
+
+    signal.signal(signal.SIGINT, silence)
+    signal.signal(signal.SIGTERM, silence)
+
+    path = resolve_buzzer_path()
+    report(path)
+    if args.raw:
+        code = play_raw(args.hz, max(args.ms, 700))
+        section("kernel log after tone")
+        for line in kernel_lines()[-12:]:
+            print(f"  {line}")
+        section("result")
+        print("  direct pin test finished")
+        print("  A buzz during 'sysfs' means epwm2 can drive the buzzer.")
+        print("  A buzz only during 'GPIO' means the pin is the buzzer")
+        print("  and epwm2 is not toggling it.")
+        return code
+
+    if args.menu:
+        tones = ((988, 0.035), (1319, 0.055))
+        nonblock = True
+        label = "menu select beeps (988 Hz, 1319 Hz)"
+    else:
+        tones = ((args.hz, args.ms / 1000.0),)
+        nonblock = False
+        label = "pwm-beeper input device"
+
+    input_ok = False
+    sysfs_ok = False
+    if not args.pwm:
+        section(label)
+        if not path:
+            print("  no pwm-beeper input device")
+        else:
+            input_ok = play_input(path, tones, nonblock=nonblock)
+    if args.pwm or (not args.input and not input_ok):
+        section("sysfs PWM (epwm2 channel B)")
+        sysfs_result = play_sysfs(tones)
+        sysfs_ok = sysfs_result == "ok"
+        if sysfs_result == "busy":
+            section(label)
+            if not path:
+                print("  no pwm-beeper input device")
+            else:
+                print("  sending the tone to the driver that owns the channel")
+                input_ok = play_input(path, tones, nonblock=nonblock)
+
+    section("kernel log after tone")
+    lines = kernel_lines()
+    if not lines:
+        print("  no beeper/ehrpwm lines")
+    else:
+        for line in lines[-12:]:
+            print(f"  {line}")
+
+    section("result")
+    if input_ok or sysfs_ok:
+        heard = []
+        if input_ok:
+            heard.append("input events accepted")
+        if sysfs_ok:
+            heard.append("sysfs PWM enabled")
+        print("  " + "; ".join(heard))
+        print("  If there was no sound, P1.33 is not toggling as EHRPWM2_B.")
+        if any(path.exists() for path in MUTE_FILES):
+            print("  Menu stays silent until the mute file above is removed.")
+        return 0
+    print("  no tone was applied")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

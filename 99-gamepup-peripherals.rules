@@ -3,6 +3,11 @@
 # driver on SPI2. Keep spi group access for any leftover spidev nodes.
 SUBSYSTEM=="spidev", GROUP="spi", MODE="0660"
 
+# lcd-backlight appears after the menu starts. Make brightness group-video
+# as soon as the device exists; the menu user is in group video.
+ACTION=="add", SUBSYSTEM=="backlight", \
+	RUN+="/usr/local/libexec/gamepup-backlight-permissions grant"
+
 # Menu beeps / hardware test write EV_SND to the pwm-beeper input device.
 KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="gamepup-buzzer", \
 	GROUP="input", MODE="0660", TAG+="uaccess"

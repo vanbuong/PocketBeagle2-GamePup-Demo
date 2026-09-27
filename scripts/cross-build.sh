@@ -310,6 +310,7 @@ copy_scripts() {
 		"$DIST_DIR/share/gifs/" 2>/dev/null || true
 	install -m 0755 "$ROOT_DIR/emulator/gamepup-menu" \
 		"$ROOT_DIR/emulator/gamepup-hardware-test" \
+		"$ROOT_DIR/emulator/gamepup-buzzer-test" \
 		"$ROOT_DIR/emulator/gamepup-voice-memo" \
 		"$ROOT_DIR/emulator/gamepup-music-player" \
 		"$DIST_DIR/bin/"
