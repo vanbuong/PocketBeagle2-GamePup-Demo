@@ -1,6 +1,6 @@
 // Frame store, BSRAM version (bring-up).  Same port list as a future PSRAM version:
 //   write port  (clk_w): wr_en, wr_addr (y*W+x), wr_data RGB565
-//   read  port  (clk_r): rd_addr, rd_data RGB565, 1 clk read latency
+//   read  port  (clk_r): rd_x/rd_y (lcd_timing counters), rd_data RGB565, 1 clk latency
 // A full 480x272 RGB565 frame (2.09 Mb) does not fit the GW1NR-9's 468 kb of BSRAM,
 // so each pixel is reduced to R_BITS/G_BITS/B_BITS (most-significant bits kept) and
 // expanded back to RGB565 on read.  Default 1/1/1 = 8 colours: 391,680 bits,
@@ -21,7 +21,8 @@ module framestore_bsram #(
 	input  wire [15:0] wr_data,
 
 	input  wire        clk_r,
-	input  wire [16:0] rd_addr,
+	input  wire [9:0]  rd_x,
+	input  wire [9:0]  rd_y,
 	output reg  [15:0] rd_data
 );
 	localparam N  = W * H;
@@ -47,6 +48,10 @@ module framestore_bsram #(
 			expand = r;
 		end
 	endfunction
+
+	// y*480 = (y<<9) - (y<<5)  (W fixed at 480 here)
+	wire [18:0] ya = {rd_y, 9'b0} - {rd_y, 5'b0};
+	wire [16:0] rd_addr = ya[16:0] + {7'b0, rd_x};
 
 	reg [PB-1:0] q;
 	always @(posedge clk_r) q <= (rd_addr < N) ? mem[rd_addr] : {PB{1'b0}};

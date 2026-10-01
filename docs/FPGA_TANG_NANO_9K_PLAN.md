@@ -102,6 +102,14 @@ Switching = run `gamepup-display` and reboot.
    HDMI/DVI output.
 7. Docs: wiring table (P1.06/08/12, P2.17/19, GND), README section.
 
+## Status
+
+Implemented in `fpga/tang-nano-9k/` (simulation only, nothing run on hardware yet):
+test pattern, SPI slave + MIPI-DBI decoder, BSRAM 8-colour frame store, PSRAM
+full-colour frame store (needs the Gowin PSRAM IP, generated locally), FPGA overlay
++ firmware + `gamepup-display`. Remaining: board bring-up, then the userspace
+480x272 port.
+
 ## Risks / open items
 
 - Gowin EDA is hard to run in GitHub CI (download/account); plan is to build

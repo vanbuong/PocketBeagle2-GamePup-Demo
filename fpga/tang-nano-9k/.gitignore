@@ -3,3 +3,4 @@ impl/
 *.gprj.user
 build_dbi.vvp
 build_top.vvp
+build_psram.vvp

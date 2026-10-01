@@ -78,6 +78,69 @@ Tang Nano 9K project, not from the schematic:
 checks pixels, blanking after DISPOFF. Mutation-tested (address off-by-one and
 ignoring display_on both fail it).
 
+## Milestone 4 - PSRAM frame store, full RGB565
+
+`framestore_psram` has the same write port as the BSRAM store; the read port is now
+`rd_x`/`rd_y` (the `lcd_timing` counters) for both stores. It stores the full 480x272
+frame (261,120 bytes) in the on-chip 64 Mbit PSRAM through Gowin's **PSRAM Memory
+Interface HS** IP (burst length 16 = 4 x 64-bit beats = 16 pixels).
+
+```
+decoder (27 MHz) -> async_fifo -> psram_ctrl (clk_out 74.25 MHz) <-> Gowin PSRAM IP <-> PSRAM
+                                      | line fetch                   
+                          line buffer (2 x 480 px, BSRAM) -> LCD scan-out (9 MHz)
+```
+
+| file | role |
+|---|---|
+| `rtl/async_fifo.v` | gray-coded dual-clock FIFO for pixel writes (64 deep) |
+| `rtl/psram_ctrl.v` | write combiner (16-px bursts with byte masks), line prefetch, startup clear |
+| `rtl/framestore_psram.v` | CDCs, line buffer, IP instance |
+| `rtl/pll_mem.v` | 27 -> 148.5 MHz memory clock |
+| `rtl/top_psram.v`, `rtl/top_bsram.v` | synthesis tops (PSRAM pads only on the PSRAM one) |
+| `sim/psram_ip_model.v` | behavioural stand-in for the Gowin IP (simulation only) |
+| `ip/psram/` | put the generated Gowin IP here (not in the repo) |
+
+How it works: SPI pixels are merged into 16-pixel bursts (byte-masked, so partial
+bursts leave neighbours alone; flushed on burst change, full burst or 24 idle
+clocks). At the start of every display line the pixel domain asks for the *next*
+line, which `psram_ctrl` reads (30 bursts) into the ping-pong line buffer. Reads and
+writes alternate when both are pending. After calibration the frame is cleared to
+black (~1.5 ms).
+
+### PSRAM build
+
+1. Generate the IP as described in `ip/psram/README.md` (burst length 16).
+2. `make bitstream-psram` (`gw_sh build.tcl psram`), then flash
+   `impl/pnr/tangnano9k_lcd_psram.fs`.
+3. Switch the SPI/DBI wiring and overlay exactly as for the BSRAM build.
+
+`make sim` runs the PSRAM path against `sim/psram_ip_model.v` (full-colour exact
+compare, a partial-burst/byte-mask case, command-spacing and alignment checks).
+Mutation-tested: wrong command spacing, wrong pixel select and ignored byte masks
+each fail it.
+
+### What the simulation does NOT prove (check on hardware)
+
+The Gowin IP is encrypted and was not available here; the model is written from
+Gowin's example for this IP, so a wrong assumption would be in both. Verify against
+IPUG943 / on the board:
+
+- `cmd` polarity (1 = write), data beat 0 in the same cycle as `cmd_en`, beats 1..3
+  in the next three cycles, `data_mask` 1 = masked, byte order little-endian.
+- `addr` unit: assumed one 16-bit word (pixel index). If it is a byte address, set
+  `ADDR_SHIFT = 1` on `psram_ctrl` (via `framestore_psram`).
+- Minimum command spacing `T_CMD = 14` clocks for burst 16 (Gowin's example) and
+  read latency; `psram_ctrl` waits for all 4 read beats and sets `err_timeout` if the
+  IP never answers.
+- `clk_out` is 74.25 MHz with a 148.5 MHz `memory_clk`; `pll_mem.v` is hand-computed.
+  No timing constraints exist yet for `clk_out` in `constraints/tangnano9k.sdc`.
+- Gowin must map the 64-bit line buffer (256 x 64) to BSRAM and the FIFO to LUT RAM.
+
+If the picture is wrong: first check that the screen is black after reset (clear
+works), then that rows from `fbi`/the console appear (writes), then banding or
+shifted pixels (word/byte order or `ADDR_SHIFT`).
+
 ## Not yet verified on hardware
 
 - rPLL settings in `pll_pix.v` (VCO 432 MHz, ODIV 48) - confirm in the Gowin IP generator.
@@ -90,4 +153,4 @@ ignoring display_on both fail it).
 
 ## Next
 
-`framestore_psram.v` (Gowin PSRAM IP wrapper, full RGB565) behind the same ports, with a line buffer on the read side; then the device-tree overlay, panel-mipi-dbi firmware blob and userspace 480x272 port.
+bring-up on the board (BSRAM, then PSRAM), then the userspace 480x272 port.

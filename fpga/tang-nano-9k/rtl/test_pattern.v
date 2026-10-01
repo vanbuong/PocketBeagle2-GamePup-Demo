@@ -2,7 +2,7 @@
 //  - 1 px white border (proves the whole panel area and edge alignment)
 //  - 8 colour bars (top 2/3)
 //  - grey ramp (bottom 1/3)
-//  - centre cross-hair
+//  - centre xhair-hair
 module test_pattern #(
 	parameter W = 480,
 	parameter H = 272
@@ -14,7 +14,7 @@ module test_pattern #(
 	localparam BAR_W = W / 8; // 60
 
 	wire border = (x == 0) || (x == W - 1) || (y == 0) || (y == H - 1);
-	wire cross  = (x == W / 2) || (y == H / 2);
+	wire xhair  = (x == W / 2) || (y == H / 2);
 	wire [3:0] bar = (x / BAR_W);
 	wire [4:0] ramp5 = (x * 32) / W;
 	wire [5:0] ramp6 = (x * 64) / W;
@@ -34,7 +34,7 @@ module test_pattern #(
 	end
 
 	always @* begin
-		if (border || cross)       rgb565 = 16'hFFFF;
+		if (border || xhair)       rgb565 = 16'hFFFF;
 		else if (y < (H * 2) / 3)  rgb565 = bar_c;
 		else                       rgb565 = {ramp5, ramp6, ramp5};
 	end
