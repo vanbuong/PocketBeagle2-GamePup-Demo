@@ -24,6 +24,19 @@ make program    # needs openFPGALoader
 
 Or open Gowin EDA, create a GW1NR-LV9QN88PC6/I5 project and add the files.
 
+## Milestone 2 - SPI slave + MIPI-DBI decoder (simulation only)
+
+| file | role |
+|---|---|
+| `rtl/spi_slave.v` | SPI mode 0, SCLK-domain shifter, D/C sampled at first bit of each byte, toggle hand-off to the system clock |
+| `rtl/dbi_decoder.v` | ILI9341 subset (`SWRESET SLPIN/OUT DISPON/OFF CASET PASET RAMWR MADCTL COLMOD`), RGB565 big-endian, window wrap, clips outside 480x272, pointer persists across CS toggles |
+| `sim/tb_dbi.v` | SPI master model at ~48 MHz: init sequence, chunked RAMWR, wrap, clip, partial byte, reset |
+
+The decoder outputs a frame-store write port (`wr_en`, `wr_addr = y*480+x`,
+`wr_data`). It is not wired into `top.v` yet because the frame store (PSRAM)
+does not exist yet; the testbench uses a behavioural array.
+Reset (`rst_n`) resets decoder state only; LCD timing keeps running.
+
 ## Not yet verified on hardware
 
 - rPLL settings in `pll_pix.v` (VCO 432 MHz, ODIV 48) - confirm in the Gowin IP generator.
@@ -35,4 +48,4 @@ Or open Gowin EDA, create a GW1NR-LV9QN88PC6/I5 project and add the files.
 
 ## Next
 
-SPI slave + MIPI-DBI decoder, PSRAM frame store, scan-out from PSRAM.
+PSRAM frame store (Gowin IP wrapper) with a write port for the decoder and a line-buffered read port for the LCD scan-out; then pick SPI/DC/reset pins and wire everything into `top.v`.

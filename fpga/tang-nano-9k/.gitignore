@@ -1,3 +1,4 @@
 build_sim.vvp
 impl/
 *.gprj.user
+build_dbi.vvp
