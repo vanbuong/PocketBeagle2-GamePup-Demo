@@ -118,7 +118,10 @@ jobs:
           Keys: arrows, Enter/Z=A, Esc/Backspace=B, X=Home, C=Y, S=Start, D=Select
           Games, mpv and audio are not launched in the simulator.
           TXT
-          (cd dist && 7z a -tzip ../gamepup-ui-sim-windows-x86_64.zip . >/dev/null 2>&1 || zip -r ../gamepup-ui-sim-windows-x86_64.zip .)
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/* -DestinationPath gamepup-ui-sim-windows-x86_64.zip
 
       - uses: actions/upload-artifact@v4
         with:
