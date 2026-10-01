@@ -23,6 +23,7 @@ PAGE_HEIGHT = 240
 WIDTH = 320
 HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
+GRAPHICS_SYSFS = Path("/sys/class/graphics")
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
 LEFT_LED = Path("/sys/class/leds/gamepup:left-eye/brightness")
@@ -42,6 +43,37 @@ FBIOGET_FSCREENINFO = 0x4602
 
 _fb_info = None
 _backlight_path = None
+
+
+
+_framebuffer_path: str | None = None
+
+
+def framebuffer_path() -> str:
+    """First /dev/fbN with a supported GamePup size.
+
+    With the FPGA setup a small second panel (240x135) may also register a framebuffer,
+    so do not assume /dev/fb0.  Falls back to FRAMEBUFFER.
+    """
+    global _framebuffer_path
+    if _framebuffer_path is not None:
+        return _framebuffer_path
+    _framebuffer_path = FRAMEBUFFER
+    try:
+        nodes = sorted(GRAPHICS_SYSFS.glob("fb[0-9]*"),
+                       key=lambda node: int(node.name[2:]))
+    except (OSError, ValueError):
+        nodes = []
+    for node in nodes:
+        try:
+            width, height = (int(value) for value in
+                             (node / "virtual_size").read_text().split(","))
+        except (OSError, ValueError):
+            continue
+        if (max(width, height), min(width, height)) in SUPPORTED_SIZES:
+            _framebuffer_path = f"/dev/{node.name}"
+            break
+    return _framebuffer_path
 
 
 def backlight_path():
@@ -88,7 +120,7 @@ def read_fb_info(framebuffer):
     yres = int.from_bytes(var[4:8], "little")
     bpp = int.from_bytes(var[24:28], "little")
     try:
-        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+        stride = int(GRAPHICS_SYSFS / Path(framebuffer_path()).name / "stride".read_text().strip())
     except (OSError, ValueError):
         stride = xres * (bpp // 8)
     if bpp not in (16, 32):
@@ -369,7 +401,7 @@ def keys_down(input_fd: int) -> set[int]:
 
 def run_test(self_test_only: bool = False) -> int:
     grant_backlight_access()
-    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+    framebuffer = os.open(framebuffer_path(), os.O_RDWR | os.O_CLOEXEC)
     buzzer_fd = os.open(BUZZER, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     input_fd = -1
     original_brightness = brightness_value()

@@ -18,8 +18,8 @@ KERNEL_VERSION=$(uname -r)
 OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
 OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
 FPGA_OVERLAY_NAME=$OVERLAY_NAME-fpga
-FPGA_FW_NAME="gamepup,fpga-lcd480x272"
-# GAMEPUP_DISPLAY=lcd|fpga selects the display overlay; unset keeps the current choice.
+FPGA_SMALL_OVERLAY_NAME=$OVERLAY_NAME-fpga-small
+# GAMEPUP_DISPLAY=lcd|fpga|fpga-small selects the display overlay; unset keeps the current choice.
 GAMEPUP_DISPLAY=${GAMEPUP_DISPLAY:-}
 EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
@@ -74,14 +74,15 @@ if [ -d "$DIST_DIR/modules" ]; then
 fi
 
 # Tang Nano 9K FPGA display: overlay, panel-mipi-dbi init firmware, selector tool.
-if [ -f "$DIST_DIR/dtbo/$FPGA_OVERLAY_NAME.dtbo" ]; then
-	install -d -m 0755 /boot/dtb/ti
-	install -m 0644 "$DIST_DIR/dtbo/$FPGA_OVERLAY_NAME.dtbo" \
-		"/boot/dtb/ti/$FPGA_OVERLAY_NAME.dtbo"
-fi
-if [ -f "$DIST_DIR/firmware/$FPGA_FW_NAME.bin" ]; then
+for fpga_overlay in "$FPGA_OVERLAY_NAME" "$FPGA_SMALL_OVERLAY_NAME"; do
+	if [ -f "$DIST_DIR/dtbo/$fpga_overlay.dtbo" ]; then
+		install -d -m 0755 /boot/dtb/ti
+		install -m 0644 "$DIST_DIR/dtbo/$fpga_overlay.dtbo" "/boot/dtb/ti/$fpga_overlay.dtbo"
+	fi
+done
+if [ -d "$DIST_DIR/firmware" ]; then
 	install -d -m 0755 /lib/firmware
-	install -m 0644 "$DIST_DIR/firmware/$FPGA_FW_NAME.bin" /lib/firmware/
+	install -m 0644 "$DIST_DIR/firmware/"*.bin /lib/firmware/
 fi
 if [ -f "$DIST_DIR/sbin/gamepup-display" ]; then
 	install -d -m 0755 /usr/local/sbin

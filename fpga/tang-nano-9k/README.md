@@ -70,6 +70,7 @@ Tang Nano 9K project, not from the schematic:
 | SPI_SCK | IO36 (shares microSD clock - keep SD slot empty) | P1.08 |
 | SPI_MOSI | IO25 | P1.12 |
 | SPI_CS_N | IO27 | P1.06 |
+| SPI_CS3_N (small display, optional) | IO26 | P1.04 |
 | DBI_DC | IO28 | P2.17 |
 | DBI_RST_N | IO29 | P2.19 |
 | GND | GND | GND |
@@ -157,6 +158,41 @@ to a non-constant value (async load), which Gowin flops cannot implement.
 Yosys is not Gowin's tool: check Gowin EDA's resource report. The PSRAM build is
 mostly the 256-bit write combiner plus its 256-bit snapshot register; if it does not fit
 or fails timing, shrink them (e.g. flush at 8 pixels) before anything else.
+
+## Milestone 5 - on-board 1.14" ST7789 as a second display
+
+The Tang Nano 9K's small 240x135 ST7789 SPI LCD can be driven by the PocketBeagle 2
+through the same wires as the main display, with its own chip select (**PB2 P1.04 =
+SPI2_CS3**). No SPI master is needed: `rtl/small_lcd_bridge.v` passes SCLK, MOSI and D/C
+straight through to the panel and gates it with CS3 (the ST7789 ignores SCL/SDA while CS
+is high, so main-display traffic on the shared lines does nothing). Linux sees a second
+ordinary SPI panel (`panel-mipi-dbi`, firmware `gamepup,tn9k-st7789-135x240.bin`).
+The main-display SPI slave and decoder are not involved.
+
+Extra wiring (the panel itself is on the board; pins from its schematic):
+
+| signal | Tang Nano 9K | PocketBeagle 2 |
+|---|---|---|
+| CS3 (small display select) | IO26 (header) | P1.04 |
+| SCLK / MOSI / D/C | shared with the main display (IO36 / IO25 / IO28) | P1.08 / P1.12 / P2.17 |
+| ST7789 SCL, SDA, RS, CS | pins 76, 77, 49, 48 (on board) | - |
+| ST7789 reset | pin 47, driven open-drain by the FPGA (low for 100 ms after configuration, then released) | not connected |
+
+`sim/tb_small_lcd.v` checks the pass-through of every line and the reset timing.
+
+Things to know:
+
+- **P1.04 is also the GamePup cape's left-eye LED pin.** `gamepup-display fpga-small`
+  takes that pad for CS3, so the left eye stops working (and may blink with small-display
+  traffic). The right eye is unchanged.
+- The ST7789 has no reset line from the PB2: the panel node has no `reset-gpios` and the
+  init sequence starts with a software reset. The FPGA resets the panel once at power-up,
+  so configure the FPGA before (or while) Linux boots.
+- The init sequence, the 240x135 window offsets (column 40, row 53, MADCTL `0x70`) and
+  inversion come from Sipeed's `spi_lcd` example for this exact panel. If the picture is
+  shifted or mirrored, adjust `vback-porch`/`hback-porch` in the overlay and MADCTL in
+  `fpga/linux/gamepup,tn9k-st7789-135x240.txt`.
+- The SPI clock for the small panel starts at 32 MHz like the main display.
 
 ## Not yet verified on hardware
 

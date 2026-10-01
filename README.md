@@ -65,14 +65,21 @@ FPGA share SPI2, D/C (P2.17) and reset (P2.19):
 |---|---|---|---|
 | `lcd` (default) | `...-gamepup-a4.dtbo` | `ili9341` | 320x240 |
 | `fpga` | `...-gamepup-a4.dtbo` + `...-gamepup-a4-fpga.dtbo` | `panel-mipi-dbi` + `/lib/firmware/gamepup,fpga-lcd480x272.bin` | 480x272 |
+| `fpga-small` | `...-gamepup-a4.dtbo` + `...-gamepup-a4-fpga-small.dtbo` | as `fpga`, plus `/lib/firmware/gamepup,tn9k-st7789-135x240.bin` for the board's 1.14" ST7789 | 480x272 + 240x135 |
 
 ```sh
 sudo gamepup-display status
 sudo gamepup-display fpga     # then reboot
+sudo gamepup-display fpga-small  # FPGA display + the board's 1.14" ST7789 on CS3 (P1.04)
 sudo gamepup-display lcd      # back to the cape LCD
 # or at install time:
 sudo GAMEPUP_DISPLAY=fpga ./install.sh
 ```
+
+`fpga-small` replaces the `fpga` overlay (it includes the same main display); the small
+panel is a second framebuffer, and the userspace picks the 320x240/480x272 one by size, so
+it never grabs the small panel. P1.04 is also the cape's left-eye LED pin: the left eye is
+given up in this mode (details in `fpga/tang-nano-9k/README.md`).
 
 `gamepup-display` adds/removes the FPGA overlay on the single `fdtoverlays` line
 of `/boot/extlinux/extlinux.conf` (backup: `extlinux.conf.before-gamepup-display`).

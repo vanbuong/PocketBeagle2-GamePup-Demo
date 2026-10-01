@@ -17,8 +17,9 @@ OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
 OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
 FPGA_OVERLAY_NAME=$OVERLAY_NAME-fpga
 FPGA_OVERLAY_TARGET=/boot/dtb/ti/$FPGA_OVERLAY_NAME.dtbo
-FPGA_FW_NAME="gamepup,fpga-lcd480x272"
-# GAMEPUP_DISPLAY=lcd|fpga selects the display overlay; unset keeps the current choice.
+FPGA_SMALL_OVERLAY_NAME=$OVERLAY_NAME-fpga-small
+FPGA_SMALL_OVERLAY_TARGET=/boot/dtb/ti/$FPGA_SMALL_OVERLAY_NAME.dtbo
+# GAMEPUP_DISPLAY=lcd|fpga|fpga-small selects the display overlay; unset keeps the current choice.
 GAMEPUP_DISPLAY=${GAMEPUP_DISPLAY:-}
 EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
 DEVICE_USER=${DEVICE_USER:-beagle}
@@ -84,11 +85,15 @@ dtc -@ -I dts -O dtb -o "$OVERLAY_TARGET" \
 	"$SCRIPT_DIR/$OVERLAY_NAME.dts"
 dtc -@ -I dts -O dtb -o "$FPGA_OVERLAY_TARGET" \
 	"$SCRIPT_DIR/$FPGA_OVERLAY_NAME.dts"
+dtc -@ -I dts -O dtb -o "$FPGA_SMALL_OVERLAY_TARGET" \
+	"$SCRIPT_DIR/$FPGA_SMALL_OVERLAY_NAME.dts"
 
 # FPGA display firmware (panel-mipi-dbi init commands) and display selector.
 install -d -m 0755 /lib/firmware /usr/local/sbin
-python3 "$SCRIPT_DIR/fpga/linux/mk-mipi-dbi-fw.py" \
-	"$SCRIPT_DIR/fpga/linux/$FPGA_FW_NAME.txt" "/lib/firmware/$FPGA_FW_NAME.bin"
+for fw_source in "$SCRIPT_DIR"/fpga/linux/*.txt; do
+	fw_name=$(basename "$fw_source" .txt)
+	python3 "$SCRIPT_DIR/fpga/linux/mk-mipi-dbi-fw.py" "$fw_source" "/lib/firmware/$fw_name.bin"
+done
 install -m 0755 "$SCRIPT_DIR/scripts/gamepup-display" /usr/local/sbin/gamepup-display
 
 if ! getent group spi >/dev/null 2>&1; then

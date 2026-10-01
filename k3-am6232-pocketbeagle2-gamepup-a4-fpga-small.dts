@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/dts-v1/;
+/plugin/;
+
+/*
+ * Tang Nano 9K FPGA main display (480x272, same as ...-a4-fpga.dtbo) PLUS the board's
+ * on-board 1.14" ST7789 (135x240) as a second SPI panel on chip select 3 (PB2 P1.04).
+ * Load INSTEAD of ...-a4-fpga.dtbo, after k3-am6232-pocketbeagle2-gamepup-a4.dtbo.
+ *
+ * Select with:  sudo gamepup-display fpga-small
+ *
+ * The FPGA passes SCLK, MOSI and D/C straight through to the ST7789, which has its
+ * own chip select, so both displays share SPI2 and the D/C line.  Linux drives it with
+ * panel-mipi-dbi using /lib/firmware/gamepup,tn9k-st7789-135x240.bin.
+ *
+ * P1.04 is also the cape's left-eye LED pin: this overlay takes that pad for CS3, so the
+ * left eye no longer works (and may blink with small-display traffic).  The right eye is
+ * unchanged.
+ *
+ * Probe order matters: the main display must register first so it stays /dev/fb0.
+ * New nodes are inserted before existing ones, so this file lists the small display
+ * fragment first and includes the main display fragments after it.
+ */
+
+&main_pmx0 {
+	gamepup_fpga_small_cs3_pins: gamepup-fpga-small-cs3-pins {
+		pinctrl-single,pins = <
+			0x01a8 0x020001 /* P1.04 D20: SPI2_CS3 (mode 1), pull-up */
+			0x016c 0x200007 /* P1.04 alternate pad Y18 (left-eye LED) disabled */
+		>;
+	};
+
+	/* Same group as the main overlay minus the left eye (its pads are used above). */
+	gamepup-eye-led-pins {
+		pinctrl-single,pins = <
+			0x015c 0x010007 /* P2.03 AB22: right eye, GPIO0_85 output */
+			0x019c 0x200007 /* P2.03 alternate AM62x pad disabled */
+		>;
+	};
+};
+
+&main_spi2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	ti,spi-num-cs = <4>;
+
+	fpga-small-display@3 {
+		compatible = "gamepup,tn9k-st7789-135x240", "panel-mipi-dbi-spi";
+		reg = <3>;
+		spi-max-frequency = <32000000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&gamepup_fpga_small_cs3_pins>;
+		/* Shared with the main display; panel-mipi-dbi allows that on one SPI bus.
+		 * The D/C pad itself is muxed by the main display's pinctrl group. */
+		dc-gpios = <&main_gpio0 64 0>;
+		write-only;		/* no MISO */
+
+		width-mm = <26>;
+		height-mm = <15>;
+
+		/* Landscape 240x135.  The ST7789 RAM is 240x320, so the visible window starts at
+		 * column 40, row 53 (MADCTL 0x70): left/top offsets = back porches. */
+		panel-timing {
+			clock-frequency = <6000000>;
+			hactive = <240>;
+			vactive = <135>;
+			hfront-porch = <0>;
+			hback-porch = <40>;
+			hsync-len = <0>;
+			vfront-porch = <0>;
+			vback-porch = <53>;
+			vsync-len = <0>;
+		};
+	};
+};
+
+/include/ "gamepup-fpga-display.dtsi"

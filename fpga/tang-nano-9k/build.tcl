@@ -5,7 +5,7 @@
 set psram [expr {[llength $argv] > 0 && [lindex $argv 0] eq "psram"}]
 
 set_device GW1NR-LV9QN88PC6/I5 -name GW1NR-9C
-foreach f {lcd_timing test_pattern pll_pix spi_slave dbi_decoder framestore_bsram lcd_scanout top} {
+foreach f {lcd_timing test_pattern pll_pix spi_slave dbi_decoder framestore_bsram lcd_scanout small_lcd_bridge top} {
 	add_file rtl/$f.v
 }
 if {$psram} {

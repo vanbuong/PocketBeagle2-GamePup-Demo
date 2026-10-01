@@ -3,7 +3,7 @@
  *
  * Minimal libretro frontend for the PocketBeagle 2 + GamePup A4.
  *
- * Video is scaled with bilinear sampling directly into /dev/fb0.
+ * Video is scaled with bilinear sampling directly into the framebuffer (/dev/fbN).
  * Input comes from the GamePup gpio-keys event device. Emulator audio is
  * reduced to an approximate monophonic pitch for the cape's PWM tone buzzer.
  */
@@ -34,7 +34,6 @@
 
 #define DEFAULT_CORE "/usr/local/lib/libretro/gambatte_libretro.so"
 #define DEFAULT_INPUT "/dev/input/by-path/platform-gamepup-buttons-event"
-#define DEFAULT_FB "/dev/fb0"
 #define DEFAULT_BUZZER "/dev/input/by-path/platform-gamepup-buzzer-event"
 #define SYSTEM_DIR "/opt/gamepup/system"
 #define SAVE_DIR "/opt/gamepup/saves"
@@ -1422,6 +1421,41 @@ done:
 	free(path);
 }
 
+/*
+ * First /dev/fbN whose size is a supported GamePup display (320x240, 480x272, either
+ * orientation).  With the FPGA setup a small second panel (240x135) may register a
+ * framebuffer too, so /dev/fb0 is not assumed.  Falls back to /dev/fb0.
+ */
+static const char *find_framebuffer(void)
+{
+	static char path[32] = "/dev/fb0";
+
+	for (unsigned index = 0; index < 8; ++index) {
+		char node[64];
+		unsigned width, height;
+		FILE *file;
+		int fields;
+
+		snprintf(node, sizeof(node), "/sys/class/graphics/fb%u/virtual_size", index);
+		file = fopen(node, "r");
+		if (!file)
+			continue;
+		fields = fscanf(file, "%u,%u", &width, &height);
+		fclose(file);
+		if (fields != 2)
+			continue;
+		unsigned long_side = width > height ? width : height;
+		unsigned short_side = width > height ? height : width;
+
+		if ((long_side == 320 && short_side == 240) ||
+		    (long_side == 480 && short_side == 272)) {
+			snprintf(path, sizeof(path), "/dev/fb%u", index);
+			break;
+		}
+	}
+	return path;
+}
+
 static void open_devices(const char *framebuffer_path, const char *input_path)
 {
 	struct fb_var_screeninfo variable;
@@ -1511,7 +1545,7 @@ int main(int argc, char **argv)
 {
 	const char *core_path = DEFAULT_CORE;
 	const char *input_path = DEFAULT_INPUT;
-	const char *framebuffer_path = DEFAULT_FB;
+	const char *framebuffer_path = find_framebuffer();
 	struct retro_system_info system_info = {0};
 	struct retro_system_av_info av_info = {0};
 	struct retro_game_info game_info = {0};

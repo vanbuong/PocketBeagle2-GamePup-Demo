@@ -110,6 +110,12 @@ full-colour frame store (needs the Gowin PSRAM IP, generated locally), FPGA over
 + firmware + `gamepup-display`. Remaining: board bring-up, then the userspace
 480x272 port.
 
+## Extension: on-board 1.14" ST7789
+
+Implemented as a SPI pass-through with its own chip select (PB2 P1.04 = SPI2_CS3), a
+`panel-mipi-dbi` node on the same bus and shared D/C. See `fpga/tang-nano-9k/README.md`,
+milestone 5. Select with `gamepup-display fpga-small`.
+
 ## Risks / open items
 
 - Gowin EDA is hard to run in GitHub CI (download/account); plan is to build

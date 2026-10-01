@@ -16,6 +16,14 @@ module top #(
 	input  wire        SPI_CS_N,
 	input  wire        DBI_DC,
 	input  wire        DBI_RST_N,
+	input  wire        SPI_CS3_N,   // PB2 P1.04 = SPI2_CS3: on-board 1.14" ST7789
+
+	// on-board ST7789 (pass-through of SPI_SCK / SPI_MOSI / DBI_DC)
+	output wire        SLCD_CLK,
+	output wire        SLCD_MO,
+	output wire        SLCD_RS,
+	output wire        SLCD_CS,
+	output wire        SLCD_RST_N,
 
 	output wire        LCD_CLK,
 	output wire        LCD_DEN,
@@ -49,6 +57,14 @@ module top #(
 		if (!dbi_arst_n) dbi_rst_sr <= 2'b00; else dbi_rst_sr <= {dbi_rst_sr[0], 1'b1};
 	wire pix_rst_n = pix_rst_sr[1];
 	wire dbi_rst_n = dbi_rst_sr[1];
+
+	// ---- on-board small LCD: SPI pass-through with its own chip select ----
+	small_lcd_bridge u_small (
+		.clk(XTAL_IN), .rst_n(sys_rst_sr[1]),
+		.sclk(SPI_SCK), .mosi(SPI_MOSI), .cs3_n(SPI_CS3_N), .dc(DBI_DC),
+		.slcd_clk(SLCD_CLK), .slcd_mo(SLCD_MO), .slcd_rs(SLCD_RS), .slcd_cs(SLCD_CS),
+		.slcd_rst_n(SLCD_RST_N)
+	);
 
 	// ---- LCD timing ----
 	wire        t_de, t_hs, t_vs;

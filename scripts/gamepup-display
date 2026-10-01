@@ -4,25 +4,29 @@
 # Tang Nano 9K FPGA display (480x272).  Edits the fdtoverlays line in extlinux.
 #
 #   sudo gamepup-display status
-#   sudo gamepup-display lcd      # cape ILI9341, 320x240
-#   sudo gamepup-display fpga     # Tang Nano 9K, 480x272
+#   sudo gamepup-display lcd          # cape ILI9341, 320x240
+#   sudo gamepup-display fpga         # Tang Nano 9K, 480x272
+#   sudo gamepup-display fpga-small   # fpga + the board's 1.14" ST7789 on CS3 (P1.04)
 #
 # Reboot afterwards.  The two displays share SPI2, D/C and reset: wire only one.
 set -eu
 
 MAIN=${GAMEPUP_OVERLAY_MAIN:-/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4.dtbo}
 FPGA=${GAMEPUP_OVERLAY_FPGA:-/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4-fpga.dtbo}
+FPGA_SMALL=${GAMEPUP_OVERLAY_FPGA_SMALL:-/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4-fpga-small.dtbo}
 EXTLINUX_CONFIG=${EXTLINUX_CONFIG:-/boot/extlinux/extlinux.conf}
 BOOT_DTB_DIR=${GAMEPUP_BOOT_DTB_DIR:-/boot/dtb/ti}
 
 usage() {
-	echo "Usage: $0 status|lcd|fpga" >&2
+	echo "Usage: $0 status|lcd|fpga|fpga-small" >&2
 	exit 2
 }
 
 current() {
 	if ! grep -qF "$MAIN" "$EXTLINUX_CONFIG"; then
 		echo "none (GamePup overlay not in $EXTLINUX_CONFIG)"
+	elif grep -qF "$FPGA_SMALL" "$EXTLINUX_CONFIG"; then
+		echo fpga-small
 	elif grep -qF "$FPGA" "$EXTLINUX_CONFIG"; then
 		echo fpga
 	else
@@ -38,7 +42,7 @@ status)
 	echo "display: $(current)"
 	exit 0
 	;;
-lcd | fpga) ;;
+lcd | fpga | fpga-small) ;;
 *) usage ;;
 esac
 
@@ -56,24 +60,28 @@ if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-display" ]; then
 	cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-display"
 fi
 
-# Always drop any existing FPGA entry first, then add it back for "fpga".
-# U-Boot reads one fdtoverlays line, so the FPGA path goes on the same line,
-# after the main overlay (it disables a node that overlay creates).
+# Always drop any existing FPGA entries first, then add back the chosen one.
+# U-Boot reads one fdtoverlays line, so the FPGA path goes on the same line, after the
+# main overlay (it disables a node that overlay creates).  fpga and fpga-small are
+# alternatives: fpga-small already contains the fpga display.
 esc() { printf '%s' "$1" | sed 's/[.[\*^$/]/\\&/g'; }
-sed -i "s# $(esc "$FPGA")##g" "$EXTLINUX_CONFIG"
+sed -i "s# $(esc "$FPGA")##g; s# $(esc "$FPGA_SMALL")##g" "$EXTLINUX_CONFIG"
 
-if [ "$1" = fpga ]; then
-	if [ ! -e "$BOOT_DTB_DIR/$(basename "$FPGA")" ]; then
-		echo "Missing $BOOT_DTB_DIR/$(basename "$FPGA"); run install.sh or install-dist.sh." >&2
+if [ "$1" = fpga ] || [ "$1" = fpga-small ]; then
+	if [ "$1" = fpga ]; then overlay=$FPGA; else overlay=$FPGA_SMALL; fi
+	if [ ! -e "$BOOT_DTB_DIR/$(basename "$overlay")" ]; then
+		echo "Missing $BOOT_DTB_DIR/$(basename "$overlay"); run install.sh or install-dist.sh." >&2
 		exit 1
 	fi
-	if [ ! -e /lib/firmware/gamepup,fpga-lcd480x272.bin ]; then
-		echo "Warning: /lib/firmware/gamepup,fpga-lcd480x272.bin is missing; the" \
-			"panel-mipi-dbi driver will fail to probe." >&2
-	fi
-	sed -i "/^[[:space:]]*fdtoverlays.*$(esc "$MAIN")/ s#\$# $FPGA#" "$EXTLINUX_CONFIG"
-	grep -qF "$FPGA" "$EXTLINUX_CONFIG" || {
-		echo "Could not add the FPGA overlay: no single 'fdtoverlays' line contains the" \
+	for firmware in gamepup,fpga-lcd480x272.bin \
+		$([ "$1" = fpga-small ] && echo gamepup,tn9k-st7789-135x240.bin); do
+		[ -e "/lib/firmware/$firmware" ] ||
+			echo "Warning: /lib/firmware/$firmware is missing; the panel-mipi-dbi" \
+				"driver will fail to probe that display." >&2
+	done
+	sed -i "/^[[:space:]]*fdtoverlays.*$(esc "$MAIN")/ s#\$# $overlay#" "$EXTLINUX_CONFIG"
+	grep -qF "$overlay" "$EXTLINUX_CONFIG" || {
+		echo "Could not add the overlay: no single 'fdtoverlays' line contains the" \
 			"GamePup overlay. Edit $EXTLINUX_CONFIG by hand." >&2
 		exit 1
 	}

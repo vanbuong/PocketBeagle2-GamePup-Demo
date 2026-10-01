@@ -34,7 +34,6 @@
 #define RENDER_SCALE 1
 #define RENDER_WIDTH (LCD_WIDTH * RENDER_SCALE)
 #define RENDER_HEIGHT (LCD_HEIGHT * RENDER_SCALE)
-#define FRAMEBUFFER "/dev/fb0"
 #define INPUT_DEVICE "/dev/input/by-path/platform-gamepup-buttons-event"
 #define INPUT_FALLBACK "/dev/input/event0"
 #define FPS_FILE "/run/gamepup/fps"
@@ -278,15 +277,51 @@ static void draw_text(uint32_t *pixels, int x, int y, const char *text,
 	}
 }
 
+/*
+ * First /dev/fbN whose size is a supported GamePup display (320x240, 480x272, either
+ * orientation).  With the FPGA setup a small second panel (240x135) may register a
+ * framebuffer too, so /dev/fb0 is not assumed.  Falls back to /dev/fb0.
+ */
+static const char *find_framebuffer(void)
+{
+	static char path[32] = "/dev/fb0";
+
+	for (unsigned index = 0; index < 8; ++index) {
+		char node[64];
+		unsigned width, height;
+		FILE *file;
+		int fields;
+
+		snprintf(node, sizeof(node), "/sys/class/graphics/fb%u/virtual_size", index);
+		file = fopen(node, "r");
+		if (!file)
+			continue;
+		fields = fscanf(file, "%u,%u", &width, &height);
+		fclose(file);
+		if (fields != 2)
+			continue;
+		unsigned long_side = width > height ? width : height;
+		unsigned short_side = width > height ? height : width;
+
+		if ((long_side == 320 && short_side == 240) ||
+		    (long_side == 480 && short_side == 272)) {
+			snprintf(path, sizeof(path), "/dev/fb%u", index);
+			break;
+		}
+	}
+	return path;
+}
+
 static bool open_framebuffer(int *framebuffer_fd)
 {
 	struct fb_var_screeninfo variable;
 	struct fb_fix_screeninfo fixed;
-	int fd = open(FRAMEBUFFER, O_RDWR | O_CLOEXEC);
+	const char *path = find_framebuffer();
+	int fd = open(path, O_RDWR | O_CLOEXEC);
 
 	if (fd < 0 || ioctl(fd, FBIOGET_VSCREENINFO, &variable) < 0 ||
 	    ioctl(fd, FBIOGET_FSCREENINFO, &fixed) < 0) {
-		perror(FRAMEBUFFER);
+		perror(path);
 		if (fd >= 0)
 			close(fd);
 		return false;

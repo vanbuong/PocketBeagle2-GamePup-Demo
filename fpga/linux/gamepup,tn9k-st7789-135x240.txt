@@ -1,0 +1,24 @@
+# Init commands for the Tang Nano 9K on-board 1.14" ST7789 (240x135 landscape).
+# Sequence from Sipeed's TangNano-9K-example spi_lcd (lcd114_test), which drives this
+# exact panel.  The ST7789 reset pin is held by the FPGA at power-up; panel-mipi-dbi has
+# no reset GPIO for it, so a software reset comes first.
+# Build:  fpga/linux/mk-mipi-dbi-fw.py "gamepup,tn9k-st7789-135x240.txt" "gamepup,tn9k-st7789-135x240.bin"
+command 0x01            # SWRESET
+delay 150
+command 0x11            # SLPOUT
+delay 120
+command 0x36 0x70       # MADCTL: landscape (MX|MV|ML)
+command 0x3a 0x05       # COLMOD: 16 bit/pixel
+command 0xb2 0x0c 0x0c 0x00 0x33 0x33   # PORCTRL
+command 0xb7 0x35       # GCTRL
+command 0xbb 0x19       # VCOMS
+command 0xc0 0x2c       # LCMCTRL
+command 0xc2 0x01       # VDVVRHEN
+command 0xc3 0x12       # VRHS
+command 0xc4 0x20       # VDVS
+command 0xc6 0x0f       # FRCTRL2
+command 0xd0 0xa4 0xa1  # PWCTRL1
+command 0xe0 0xd0 0x04 0x0d 0x11 0x13 0x2b 0x3f 0x54 0x4c 0x18 0x0d 0x0b 0x1f 0x23   # PVGAMCTRL
+command 0xe1 0xd0 0x04 0x0c 0x11 0x13 0x2c 0x3f 0x44 0x51 0x2f 0x1f 0x1f 0x20 0x23   # NVGAMCTRL
+command 0x21            # INVON (this panel needs inversion)
+command 0x29            # DISPON

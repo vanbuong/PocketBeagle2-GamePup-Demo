@@ -21,6 +21,7 @@ SUPPORTED_SIZES = ((320, 240), (480, 272))
 WIDTH = 320
 HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
+GRAPHICS_SYSFS = Path("/sys/class/graphics")
 INPUT = "/dev/input/by-path/platform-gamepup-buttons-event"
 INPUT_FALLBACK = "/dev/input/event0"
 BUZZER = "/dev/input/by-path/platform-gamepup-buzzer-event"
@@ -101,6 +102,37 @@ _fb_info: dict | None = None
 _backlight_path: Path | None = None
 
 
+
+_framebuffer_path: str | None = None
+
+
+def framebuffer_path() -> str:
+    """First /dev/fbN with a supported GamePup size.
+
+    With the FPGA setup a small second panel (240x135) may also register a framebuffer,
+    so do not assume /dev/fb0.  Falls back to FRAMEBUFFER.
+    """
+    global _framebuffer_path
+    if _framebuffer_path is not None:
+        return _framebuffer_path
+    _framebuffer_path = FRAMEBUFFER
+    try:
+        nodes = sorted(GRAPHICS_SYSFS.glob("fb[0-9]*"),
+                       key=lambda node: int(node.name[2:]))
+    except (OSError, ValueError):
+        nodes = []
+    for node in nodes:
+        try:
+            width, height = (int(value) for value in
+                             (node / "virtual_size").read_text().split(","))
+        except (OSError, ValueError):
+            continue
+        if (max(width, height), min(width, height)) in SUPPORTED_SIZES:
+            _framebuffer_path = f"/dev/{node.name}"
+            break
+    return _framebuffer_path
+
+
 def backlight_path() -> Path | None:
     global _backlight_path
     if _backlight_path is not None:
@@ -149,7 +181,7 @@ def read_fb_info(framebuffer: int) -> dict:
     # Portable approach: read sysfs when available.
     stride = 0
     try:
-        stride = int(Path("/sys/class/graphics/fb0/stride").read_text().strip())
+        stride = int(GRAPHICS_SYSFS / Path(framebuffer_path()).name / "stride".read_text().strip())
     except (OSError, ValueError):
         stride = xres * (bpp // 8)
     if bpp not in (16, 32):
@@ -822,7 +854,7 @@ def run_menu(games: list[Path]) -> int:
         "about": 0,
     }
     claim_display()
-    framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+    framebuffer = os.open(framebuffer_path(), os.O_RDWR | os.O_CLOEXEC)
     input_fd = open_buttons()
 
     try:
@@ -886,7 +918,7 @@ def run_menu(games: list[Path]) -> int:
                             launch(game)
                             if not running:
                                 return 0
-                            framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                            framebuffer = os.open(framebuffer_path(), os.O_RDWR | os.O_CLOEXEC)
                             claim_display()
                             input_fd = open_buttons()
                             wait_for_launch_keys_to_release(input_fd)
@@ -914,7 +946,7 @@ def run_menu(games: list[Path]) -> int:
                         launch(game)
                         if not running:
                             return 0
-                        framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                        framebuffer = os.open(framebuffer_path(), os.O_RDWR | os.O_CLOEXEC)
                         claim_display()
                         input_fd = open_buttons()
                         wait_for_launch_keys_to_release(input_fd)
@@ -935,7 +967,7 @@ def run_menu(games: list[Path]) -> int:
                         launch_gpu_benchmark(GPU_BENCHMARKS[benchmark_index][1])
                         if not running:
                             return 0
-                        framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                        framebuffer = os.open(framebuffer_path(), os.O_RDWR | os.O_CLOEXEC)
                         claim_display()
                         input_fd = open_buttons()
                         wait_for_launch_keys_to_release(input_fd)
@@ -954,7 +986,7 @@ def run_menu(games: list[Path]) -> int:
                             launch_hardware_test()
                             if not running:
                                 return 0
-                            framebuffer = os.open(FRAMEBUFFER, os.O_RDWR | os.O_CLOEXEC)
+                            framebuffer = os.open(framebuffer_path(), os.O_RDWR | os.O_CLOEXEC)
                             claim_display()
                             input_fd = open_buttons()
                             wait_for_launch_keys_to_release(input_fd)

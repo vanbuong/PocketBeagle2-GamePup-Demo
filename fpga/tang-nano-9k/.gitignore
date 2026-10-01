@@ -4,3 +4,4 @@ impl/
 build_dbi.vvp
 build_top.vvp
 build_psram.vvp
+build_small.vvp

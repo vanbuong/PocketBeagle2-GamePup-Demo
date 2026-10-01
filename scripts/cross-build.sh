@@ -168,11 +168,15 @@ build_overlay() {
 	dtc -@ -I dts -O dtb \
 		-o "$DIST_DIR/dtbo/k3-am6232-pocketbeagle2-gamepup-a4-fpga.dtbo" \
 		"$ROOT_DIR/k3-am6232-pocketbeagle2-gamepup-a4-fpga.dts"
+	dtc -@ -I dts -O dtb \
+		-o "$DIST_DIR/dtbo/k3-am6232-pocketbeagle2-gamepup-a4-fpga-small.dtbo" \
+		"$ROOT_DIR/k3-am6232-pocketbeagle2-gamepup-a4-fpga-small.dts"
 	# Tang Nano 9K display: panel-mipi-dbi init firmware + display selector.
 	mkdir -p "$DIST_DIR/firmware" "$DIST_DIR/sbin"
-	python3 "$ROOT_DIR/fpga/linux/mk-mipi-dbi-fw.py" \
-		"$ROOT_DIR/fpga/linux/gamepup,fpga-lcd480x272.txt" \
-		"$DIST_DIR/firmware/gamepup,fpga-lcd480x272.bin"
+	for fw_source in "$ROOT_DIR"/fpga/linux/*.txt; do
+		python3 "$ROOT_DIR/fpga/linux/mk-mipi-dbi-fw.py" "$fw_source" \
+			"$DIST_DIR/firmware/$(basename "$fw_source" .txt).bin"
+	done
 	install -m 0755 "$ROOT_DIR/scripts/gamepup-display" "$DIST_DIR/sbin/"
 }
 
