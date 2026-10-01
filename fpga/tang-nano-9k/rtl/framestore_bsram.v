@@ -38,7 +38,7 @@ module framestore_bsram #(
 	wire [PB-1:0] q;
 	genvar gb;
 	generate for (gb = 0; gb < PB; gb = gb + 1) begin : g_bit
-		reg mem [0:131071];
+		(* syn_ramstyle = "block_ram", ram_style = "block" *) reg mem [0:131071];
 `ifdef SIM
 		integer i;
 		initial for (i = 0; i < 131072; i = i + 1) mem[i] = 1'b0;   // avoid X in simulation

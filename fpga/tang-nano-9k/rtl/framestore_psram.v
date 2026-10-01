@@ -108,7 +108,7 @@ module framestore_psram #(
 	);
 
 	// ---------------- line buffer: 2 x 128 x 64 bit, clk_m write / clk_r read ----------------
-	reg [63:0] lbuf [0:255];
+	(* syn_ramstyle = "block_ram", ram_style = "block" *) reg [63:0] lbuf [0:255];
 	always @(posedge clk_m) if (lb_we) lbuf[lb_addr] <= lb_data;
 
 	reg [63:0] lw;

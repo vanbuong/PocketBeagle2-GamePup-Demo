@@ -141,6 +141,23 @@ If the picture is wrong: first check that the screen is black after reset (clear
 works), then that rows from `fbi`/the console appear (writes), then banding or
 shifted pixels (word/byte order or `ADDR_SHIFT`).
 
+## Synthesis sanity check (Yosys `synth_gowin`, not Gowin EDA)
+
+Run with the Gowin PLL and PSRAM IP as black boxes, to catch problems before Gowin EDA:
+
+| build | result |
+|---|---|
+| BSRAM (`top_bsram`) | ~1,240 cells, 24 block RAMs (`DP`), ~590 LUT4 of 8,640 |
+| PSRAM (`top_psram`) | ~11,000 cells incl. mux cells, ~6,000 LUTs (about 70%), line buffer in BSRAM, FIFO in LUT RAM, ~1,000 flip-flops |
+
+Problems this found and that are fixed: a single wide memory with range guards mapped to
+~94,000 LUT/mux cells (now one 1-bit memory per stored bit, power-of-two depth, with
+`syn_ramstyle="block_ram"` / `ram_style="block"` attributes); and a synchroniser reset
+to a non-constant value (async load), which Gowin flops cannot implement.
+Yosys is not Gowin's tool: check Gowin EDA's resource report. The PSRAM build is
+mostly the 256-bit write combiner plus its 256-bit snapshot register; if it does not fit
+or fails timing, shrink them (e.g. flush at 8 pixels) before anything else.
+
 ## Not yet verified on hardware
 
 - rPLL settings in `pll_pix.v` (VCO 432 MHz, ODIV 48) - confirm in the Gowin IP generator.
