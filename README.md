@@ -82,9 +82,10 @@ plan: [`docs/FPGA_TANG_NANO_9K_PLAN.md`](docs/FPGA_TANG_NANO_9K_PLAN.md).
 > **Status:** the FPGA overlay, firmware blob and selector are checked only by
 > `scripts/test-overlays.sh` (overlay merge) and by comparing the firmware with
 > the kernel's `mipi-dbi-cmd`. They have not been run on a PocketBeagle 2 yet.
-> The GamePup userspace (menu, emulators) still assumes a 320x240 framebuffer;
-> on the FPGA display they will not fill the 480x272 screen until the userspace
-> 480x272 port is done. The Linux console and `fbi`/`fbset` work.
+> The menu, hardware test, emulator frontend and GPU benchmarks take the canvas
+> size from `/dev/fb0` (320x240 or 480x272), see the next section. That is checked
+> by host-side tests (`make -C emulator test`, `emulator/tests/render_ui.py`), not
+> on the FPGA display itself.
 
 ## Displays and render resolutions
 
@@ -94,6 +95,14 @@ Menus, the hardware tester, and GPU benchmarks render at the native 320x240
 resolution. Games keep their intended aspect ratio and use the remaining space
 for black bands or the optional bezel.
 
+With the Tang Nano 9K FPGA display (see below) the framebuffer is **480x272** and
+the userspace follows it automatically: the menu and frontend use the full 480x272
+canvas (the menu shows 19 list rows instead of 16), the hardware test page is
+centred with full-screen colour patterns, and the GPU benchmarks keep rendering
+320x240 so scores stay comparable and are centred. The N64 core also renders 320x240
+internally. Only the rows that changed since the last frame are written to the
+framebuffer, which keeps SPI traffic down.
+
 | Content | Source/render resolution | LCD game area | Letterbox |
 |---|---:|---:|---|
 | Menu, tools, tests | 320x240 | 320x240 | none |
@@ -102,6 +111,21 @@ for black bands or the optional bezel.
 | Nintendo 64 | 320x240 PowerVR pbuffer | 320x240 | none |
 | Doom | normally 320x200 from PrBoom | 320x240, corrected to 4:3 | none (fills height) |
 | PowerVR benchmarks | 320x240 OpenGL ES pbuffer | 320x240 | none |
+
+On the 480x272 FPGA display the same content is placed as follows:
+
+| Content | Game area on 480x272 | Border |
+|---|---:|---|
+| Menu, tools | 480x272 (native) | none |
+| Game Boy / Game Boy Color | 302x272 | ~89 left/right |
+| NES | 290x272 | 95 left/right |
+| Nintendo 64 (320x240 render) | 362x272 | ~59 left/right |
+| Doom (4:3) | 362x272 | ~59 left/right |
+| PowerVR benchmarks, hardware test page | 320x240, centred | 80 left/right, 16 top/bottom |
+
+The system-artwork bezel strips in `emulator/bezels/` are still 320 pixels wide and are
+stretched horizontally (nearest neighbour) if a band is shown; the bands only
+appear for wide sources, so they rarely show on 480x272.
 
 The optional second screen is a **128x64 SH1106** mono OLED on I2C2. Both its
 status dashboard and GIF mode render at 128x64; it does not mirror the main LCD.

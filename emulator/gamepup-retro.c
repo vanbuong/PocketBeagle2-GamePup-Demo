@@ -81,6 +81,9 @@ static unsigned fb_height = 240;
 static unsigned fb_stride = 320 * 4;
 /* Physical /dev/fb0 geometry (may be 16 bpp and/or portrait). */
 static uint8_t *fb_present;
+/* Copy of the last frame sent to /dev/fb0, to send only changed rows. */
+static uint8_t *fb_prev;
+static bool fb_prev_valid;
 static size_t fb_present_size;
 static unsigned hw_width;
 static unsigned hw_height;
@@ -616,6 +619,8 @@ static uint32_t xrgb_to_rgb565(uint32_t color)
 static void write_framebuffer(void)
 {
 	size_t written = 0;
+	size_t start = 0;
+	size_t end = fb_present_size;
 	const uint32_t *src = (const uint32_t *)fb_frame;
 
 	if (hw_width == fb_width && hw_height == fb_height && hw_bpp == 32) {
@@ -656,9 +661,33 @@ static void write_framebuffer(void)
 		return;
 	}
 
-	while (written < fb_present_size) {
+	/*
+	 * Only send the rows that changed since the last frame.  The framebuffer is
+	 * flushed to the panel over SPI (about 15 fps for a full 480x272 frame at
+	 * 32 MHz), and the DRM fbdev layer flushes just the written range, so letterbox
+	 * bands and static screens cost nothing.
+	 */
+	if (fb_prev && fb_prev_valid) {
+		unsigned first = hw_height, last = 0;
+
+		for (unsigned y = 0; y < hw_height; ++y) {
+			if (memcmp(fb_present + (size_t)y * hw_stride,
+				   fb_prev + (size_t)y * hw_stride, hw_stride) == 0)
+				continue;
+			if (first == hw_height)
+				first = y;
+			last = y;
+		}
+		if (first == hw_height)
+			return;			/* identical frame: nothing to send */
+		start = (size_t)first * hw_stride;
+		end = (size_t)(last + 1) * hw_stride;
+	}
+
+	written = start;
+	while (written < end) {
 		ssize_t result = pwrite(fb_fd, fb_present + written,
-					fb_present_size - written, (off_t)written);
+					end - written, (off_t)written);
 		if (result < 0 && errno == EINTR)
 			continue;
 		if (result <= 0) {
@@ -667,6 +696,10 @@ static void write_framebuffer(void)
 			return;
 		}
 		written += (size_t)result;
+	}
+	if (fb_prev) {
+		memcpy(fb_prev + start, fb_present + start, end - start);
+		fb_prev_valid = true;
 	}
 }
 
@@ -992,6 +1025,24 @@ static uint32_t bilinear_rgba_pixel(const uint8_t *row0, const uint8_t *row1,
 	return output;
 }
 
+/*
+ * Size of the game image inside the canvas: fit the width first, then the height,
+ * keeping the display aspect.  Doom's 320x200 is shown 4:3 (non-square pixels).
+ */
+static void fit_game_size(unsigned width, unsigned height, bool four_by_three,
+			  unsigned *dst_width, unsigned *dst_height)
+{
+	unsigned aspect_w = four_by_three ? 4 : width;
+	unsigned aspect_h = four_by_three ? 3 : height;
+
+	*dst_width = fb_width;
+	*dst_height = (unsigned)(((uint64_t)aspect_h * *dst_width) / aspect_w);
+	if (*dst_height > fb_height) {
+		*dst_height = fb_height;
+		*dst_width = (unsigned)(((uint64_t)aspect_w * *dst_height) / aspect_h);
+	}
+}
+
 static void present_hardware_frame(unsigned width, unsigned height)
 {
 	unsigned dst_width;
@@ -1022,12 +1073,7 @@ static void present_hardware_frame(unsigned width, unsigned height)
 		return;
 	}
 
-	dst_width = fb_width;
-	dst_height = (unsigned)(((uint64_t)height * dst_width) / width);
-	if (dst_height > fb_height) {
-		dst_height = fb_height;
-		dst_width = (unsigned)(((uint64_t)width * dst_height) / height);
-	}
+	fit_game_size(width, height, false, &dst_width, &dst_height);
 	left = (fb_width - dst_width) / 2;
 	top = (fb_height - dst_height) / 2;
 	if (bezel_style == BEZEL_GAMEPUP)
@@ -1084,15 +1130,8 @@ static void video_callback(const void *data, unsigned width, unsigned height,
 		return;
 	}
 
-	dst_width = fb_width;
-	if (strcmp(emulator_mode(), "DOOM") == 0)
-		dst_height = dst_width * 3 / 4;
-	else
-		dst_height = (unsigned)(((uint64_t)height * dst_width) / width);
-	if (dst_height > fb_height) {
-		dst_height = fb_height;
-		dst_width = (unsigned)(((uint64_t)width * dst_height) / height);
-	}
+	fit_game_size(width, height, strcmp(emulator_mode(), "DOOM") == 0,
+		      &dst_width, &dst_height);
 	left = (fb_width - dst_width) / 2;
 	top = (fb_height - dst_height) / 2;
 	if (bezel_style == BEZEL_GAMEPUP)
@@ -1404,26 +1443,36 @@ static void open_devices(const char *framebuffer_path, const char *input_path)
 			hw_bpp);
 		exit(EXIT_FAILURE);
 	}
-	if (!((hw_width == 320 && hw_height == 240) ||
-	      (hw_width == 240 && hw_height == 320))) {
-		fprintf(stderr,
-			"Unsupported framebuffer %ux%u (need 320x240 or 240x320)\n",
-			hw_width, hw_height);
-		exit(EXIT_FAILURE);
+	/*
+	 * Logical landscape canvas = framebuffer size: 320x240 (cape ILI9341) or 480x272
+	 * (Tang Nano 9K FPGA display); a portrait 240x320 panel is rotated.
+	 */
+	{
+		unsigned long_side = hw_width > hw_height ? hw_width : hw_height;
+		unsigned short_side = hw_width > hw_height ? hw_height : hw_width;
+
+		if (!((long_side == 320 && short_side == 240) ||
+		      (long_side == 480 && short_side == 272))) {
+			fprintf(stderr,
+				"Unsupported framebuffer %ux%u (need 320x240, 240x320 or 480x272)\n",
+				hw_width, hw_height);
+			exit(EXIT_FAILURE);
+		}
+		fb_width = long_side;
+		fb_height = short_side;
 	}
-	fb_width = 320;
-	fb_height = 240;
 	fb_stride = fb_width * 4;
 	fb_frame_size = (size_t)fb_stride * fb_height;
 	fb_frame = calloc(1, fb_frame_size);
 	fb_present_size = (size_t)hw_stride * hw_height;
 	fb_present = calloc(1, fb_present_size);
+	fb_prev = calloc(1, fb_present_size);	/* optional: NULL just disables the optimisation */
 	if (!fb_frame || !fb_present) {
 		perror("calloc framebuffer");
 		exit(EXIT_FAILURE);
 	}
-	fprintf(stderr, "GamePup framebuffer view 320x240 -> hw %ux%u stride=%u bpp=%u\n",
-		hw_width, hw_height, hw_stride, hw_bpp);
+	fprintf(stderr, "GamePup framebuffer view %ux%u -> hw %ux%u stride=%u bpp=%u\n",
+		fb_width, fb_height, hw_width, hw_height, hw_stride, hw_bpp);
 
 	input_fd = open(input_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (input_fd < 0) {

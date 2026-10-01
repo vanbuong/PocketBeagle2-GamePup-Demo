@@ -46,6 +46,9 @@
 static volatile sig_atomic_t keep_running = 1;
 static unsigned fb_width;
 static unsigned fb_height;
+static bool fb_portrait;
+static unsigned fb_offset_x;
+static unsigned fb_offset_y;
 static unsigned fb_bpp;
 static unsigned fb_stride;
 static size_t fb_frame_size;
@@ -298,13 +301,22 @@ static bool open_framebuffer(int *framebuffer_fd)
 		close(fd);
 		return false;
 	}
-	if (!((fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT) ||
-	      (fb_width == LCD_HEIGHT && fb_height == LCD_WIDTH))) {
+	/*
+	 * Benchmarks always render 320x240 so results stay comparable.  On the 480x272
+	 * Tang Nano 9K FPGA display the canvas is centred with black borders.
+	 */
+	fb_portrait = fb_width == LCD_HEIGHT && fb_height == LCD_WIDTH;
+	if (!((fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT) || fb_portrait ||
+	      (fb_width == 480 && fb_height == 272))) {
 		fprintf(stderr,
-			"Unsupported framebuffer %ux%u (need 320x240 or 240x320)\n",
+			"Unsupported framebuffer %ux%u (need 320x240, 240x320 or 480x272)\n",
 			fb_width, fb_height);
 		close(fd);
 		return false;
+	}
+	if (!fb_portrait) {
+		fb_offset_x = (fb_width - LCD_WIDTH) / 2;
+		fb_offset_y = (fb_height - LCD_HEIGHT) / 2;
 	}
 	fb_frame_size = (size_t)fb_stride * fb_height;
 	fb_frame = calloc(1, fb_frame_size);
@@ -324,16 +336,20 @@ static void present_canvas(int framebuffer_fd, const uint32_t *canvas)
 {
 	size_t written = 0;
 
-	if (fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT && fb_bpp == 32) {
-		for (unsigned y = 0; y < fb_height; ++y) {
-			uint32_t *row = (uint32_t *)(fb_frame + y * fb_stride);
+	if (!fb_portrait && fb_bpp == 32) {
+		for (unsigned y = 0; y < LCD_HEIGHT; ++y) {
+			uint32_t *row = (uint32_t *)(fb_frame +
+						     (size_t)(y + fb_offset_y) * fb_stride) +
+					fb_offset_x;
 
 			memcpy(row, canvas + y * LCD_WIDTH,
 			       (size_t)LCD_WIDTH * sizeof(*canvas));
 		}
-	} else if (fb_width == LCD_WIDTH && fb_height == LCD_HEIGHT && fb_bpp == 16) {
-		for (unsigned y = 0; y < fb_height; ++y) {
-			uint16_t *row = (uint16_t *)(fb_frame + y * fb_stride);
+	} else if (!fb_portrait && fb_bpp == 16) {
+		for (unsigned y = 0; y < LCD_HEIGHT; ++y) {
+			uint16_t *row = (uint16_t *)(fb_frame +
+						     (size_t)(y + fb_offset_y) * fb_stride) +
+					fb_offset_x;
 
 			for (int x = 0; x < LCD_WIDTH; ++x) {
 				uint32_t color = canvas[y * LCD_WIDTH + x];

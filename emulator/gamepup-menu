@@ -15,6 +15,9 @@ import sys
 import time
 
 
+# Landscape canvas size.  Set from the framebuffer by read_fb_info(): the cape ILI9341
+# is 320x240, the Tang Nano 9K FPGA display (panel-mipi-dbi) is 480x272.
+SUPPORTED_SIZES = ((320, 240), (480, 272))
 WIDTH = 320
 HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
@@ -151,8 +154,11 @@ def read_fb_info(framebuffer: int) -> dict:
         stride = xres * (bpp // 8)
     if bpp not in (16, 32):
         raise OSError(f"Expected 16- or 32-bit framebuffer, got {bpp} bpp")
-    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+    landscape = (max(xres, yres), min(xres, yres))
+    if landscape not in SUPPORTED_SIZES:
         raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    global WIDTH, HEIGHT
+    WIDTH, HEIGHT = landscape
     _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
     print(f"GamePup framebuffer {xres}x{yres} stride={stride} bpp={bpp}", file=sys.stderr)
     return _fb_info
@@ -284,6 +290,26 @@ def draw_text(canvas: array, x: int, y: int, text: str, color: int, scale: int =
         cursor += 6 * scale
 
 
+def footer_rule_y() -> int:
+    return HEIGHT - 16          # 224 on 320x240, 256 on 480x272
+
+
+def footer_text_y() -> int:
+    return HEIGHT - 12
+
+
+def list_top_y() -> int:
+    return 38
+
+
+def visible_rows() -> int:
+    return max(1, (footer_rule_y() - list_top_y()) // 11)   # 16 on 320x240, 19 on 480x272
+
+
+def display_label() -> str:
+    return "FPGA 480X272" if (WIDTH, HEIGHT) == (480, 272) else "ILI9341 320X240"
+
+
 def platform_games(games: list[Path], screen: str) -> list[Path]:
     if screen == "nes":
         return [game for game in games if game.suffix.casefold() == ".nes"]
@@ -349,6 +375,7 @@ def menu_items(games: list[Path], screen: str) -> list[str]:
 
 
 def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
+    read_fb_info(framebuffer)       # sets WIDTH/HEIGHT before the canvas is allocated
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     titles = {"home": "GAMEPUP", "nes": "NES GAMES", "gbc": "GAME BOY",
               "n64": "N64 GAMES",
@@ -368,19 +395,19 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         draw_text(canvas, 16, 92, "POCKETBEAGLE 2", WHITE)
         draw_text(canvas, 16, 106, "ARMBIAN LINUX", WHITE)
         draw_text(canvas, 16, 136, "DISPLAY", GRAY)
-        draw_text(canvas, 16, 150, "ILI9341 320X240", WHITE)
+        draw_text(canvas, 16, 150, display_label(), WHITE)
         draw_text(canvas, 16, 178, "GITHUB", GRAY)
         draw_text(canvas, 16, 192, "@GRIPPY98", GREEN)
-        fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
-        draw_text(canvas, 8, 228, "B:BACK", GRAY)
+        fill_rect(canvas, 3, footer_rule_y(), WIDTH - 6, 1, DARK_GREEN)
+        draw_text(canvas, 8, footer_text_y(), "B:BACK", GRAY)
         present_canvas(framebuffer, canvas)
         return
 
     items = menu_items(games, screen)
-    visible = 16
+    visible = visible_rows()
     first = max(0, min(selected - visible // 2, len(items) - visible))
     for row_index, item_index in enumerate(range(first, min(first + visible, len(items)))):
-        y = 38 + row_index * 11
+        y = list_top_y() + row_index * 11
         if item_index == selected:
             fill_rect(canvas, 2, y - 2, WIDTH - 4, 10, BLUE)
             color = YELLOW
@@ -389,13 +416,13 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         draw_text(canvas, 8, y, items[item_index][:48], color)
         slider = None
         if screen == "settings" and item_index == 2:
-            slider = (200, 96, BRIGHTNESS_LEVELS,
+            slider = (WIDTH - 120, 96, BRIGHTNESS_LEVELS,
                       BRIGHTNESS_LEVELS.index(normalized_brightness_level()))
         elif screen == "second" and item_index == 1:
-            slider = (200, 96, OLED_BRIGHTNESS_LEVELS,
+            slider = (WIDTH - 120, 96, OLED_BRIGHTNESS_LEVELS,
                       OLED_BRIGHTNESS_LEVELS.index(oled_brightness_level()))
         elif screen == "second" and item_index == 2:
-            slider = (220, 72, OLED_REFRESH_LEVELS,
+            slider = (WIDTH - 100, 72, OLED_REFRESH_LEVELS,
                       OLED_REFRESH_LEVELS.index(oled_refresh_rate()))
         if slider:
             slider_x, slider_width, levels, position = slider
@@ -405,7 +432,7 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
             fill_rect(canvas, knob_x, y, 3, 7, color)
 
     page = f"{selected + 1}/{len(items)}"
-    fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
+    fill_rect(canvas, 3, footer_rule_y(), WIDTH - 6, 1, DARK_GREEN)
     if screen == "home":
         muted = MUTE_FILE.exists()
         footer = "SOUND:MUTED" if muted else "SOUND:ON"
@@ -423,8 +450,8 @@ def draw_menu(framebuffer: int, games: list[Path], screen: str, selected: int):
         footer_color = GRAY
     else:
         footer, footer_color = "B:BACK", GRAY
-    draw_text(canvas, 8, 228, footer, footer_color)
-    draw_text(canvas, WIDTH - len(page) * 6 - 6, 228, page, YELLOW)
+    draw_text(canvas, 8, footer_text_y(), footer, footer_color)
+    draw_text(canvas, WIDTH - len(page) * 6 - 6, footer_text_y(), page, YELLOW)
     present_canvas(framebuffer, canvas)
 
 
@@ -516,6 +543,7 @@ def import_usb_roms() -> list[str]:
 
 
 def draw_import_screen(framebuffer: int, result: list[str] | None = None):
+    read_fb_info(framebuffer)
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
     title = "USB ROM IMPORT"
     title_width = (len(title) * 6 - 1)
@@ -536,9 +564,9 @@ def draw_import_screen(framebuffer: int, result: list[str] | None = None):
     for index, line in enumerate(lines[:10]):
         color = YELLOW if index == 0 and result is not None else WHITE
         draw_text(canvas, 16, 40 + index * 16, line[:48], color)
-    fill_rect(canvas, 3, 224, WIDTH - 6, 1, DARK_GREEN)
-    draw_text(canvas, 8, 228, "B BACK", GRAY)
-    draw_text(canvas, 200, 228, "A IMPORT", GREEN)
+    fill_rect(canvas, 3, footer_rule_y(), WIDTH - 6, 1, DARK_GREEN)
+    draw_text(canvas, 8, footer_text_y(), "B BACK", GRAY)
+    draw_text(canvas, WIDTH - 120, footer_text_y(), "A IMPORT", GREEN)
     present_canvas(framebuffer, canvas)
 
 

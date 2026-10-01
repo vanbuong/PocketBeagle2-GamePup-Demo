@@ -14,6 +14,12 @@ import sys
 import time
 
 
+# Landscape canvas = framebuffer size, set by read_fb_info(): 320x240 (cape ILI9341) or
+# 480x272 (Tang Nano 9K FPGA display).  The test page is designed for 320x240 and is
+# centred on larger screens; the colour/bar patterns fill the whole screen.
+SUPPORTED_SIZES = ((320, 240), (480, 272))
+PAGE_WIDTH = 320
+PAGE_HEIGHT = 240
 WIDTH = 320
 HEIGHT = 240
 FRAMEBUFFER = "/dev/fb0"
@@ -87,8 +93,11 @@ def read_fb_info(framebuffer):
         stride = xres * (bpp // 8)
     if bpp not in (16, 32):
         raise OSError(f"Expected 16- or 32-bit framebuffer, got {bpp} bpp")
-    if (xres, yres) not in ((WIDTH, HEIGHT), (HEIGHT, WIDTH)):
+    landscape = (max(xres, yres), min(xres, yres))
+    if landscape not in SUPPORTED_SIZES:
         raise OSError(f"Unsupported framebuffer {xres}x{yres}")
+    global WIDTH, HEIGHT
+    WIDTH, HEIGHT = landscape
     _fb_info = {"width": xres, "height": yres, "stride": stride, "bpp": bpp}
     print(f"GamePup framebuffer {xres}x{yres} stride={stride} bpp={bpp}", file=sys.stderr)
     return _fb_info
@@ -282,11 +291,12 @@ def adjust_brightness(direction: int) -> int:
 
 
 def draw_color_test(framebuffer: int, pattern: int):
+    read_fb_info(framebuffer)
     colors = (RED, GREEN, BLUE, WHITE, BLACK)
     if pattern <= len(colors):
         canvas = array("I", [colors[pattern - 1]]) * (WIDTH * HEIGHT)
         label_color = BLACK if colors[pattern - 1] == WHITE else WHITE
-        centered_text(canvas, 220, "START NEXT", label_color)
+        centered_text(canvas, HEIGHT - 20, "START NEXT", label_color)
     else:
         canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
         bars = (WHITE, YELLOW, CYAN, GREEN, MAGENTA, RED, BLUE, BLACK)
@@ -295,17 +305,20 @@ def draw_color_test(framebuffer: int, pattern: int):
             fill_rect(canvas, index * bar_width, 0,
                       WIDTH if index == len(bars) - 1 else bar_width,
                       HEIGHT, color)
-        fill_rect(canvas, (WIDTH - 96) // 2, 216, 96, 14, BLACK)
-        centered_text(canvas, 220, "START UI", WHITE)
+        fill_rect(canvas, (WIDTH - 96) // 2, HEIGHT - 24, 96, 14, BLACK)
+        centered_text(canvas, HEIGHT - 20, "START UI", WHITE)
     present_canvas(framebuffer, canvas)
 
 
 def draw_ui(framebuffer: int, pressed: set[int], tested: set[int],
             frequency: int, brightness: int):
+    read_fb_info(framebuffer)
+    ox = (WIDTH - PAGE_WIDTH) // 2       # centre the 320x240 page on larger screens
+    oy = (HEIGHT - PAGE_HEIGHT) // 2
     canvas = array("I", [BLACK]) * (WIDTH * HEIGHT)
-    centered_text(canvas, 3, "HARDWARE TEST", GREEN)
-    centered_text(canvas, 14, f"BUTTONS {len(tested)}/10", YELLOW)
-    fill_rect(canvas, 3, 27, WIDTH - 6, 1, DARK_GREEN)
+    centered_text(canvas, oy + 3, "HARDWARE TEST", GREEN)
+    centered_text(canvas, oy + 14, f"BUTTONS {len(tested)}/10", YELLOW)
+    fill_rect(canvas, ox + 3, oy + 27, PAGE_WIDTH - 6, 1, DARK_GREEN)
 
     for code, (label, x, y, width, height) in BUTTONS.items():
         if code in pressed:
@@ -314,18 +327,18 @@ def draw_ui(framebuffer: int, pressed: set[int], tested: set[int],
             color, text_color = DARK_GREEN, GREEN
         else:
             color, text_color = BLUE, WHITE
-        fill_rect(canvas, x, y, width, height, color)
+        fill_rect(canvas, ox + x, oy + y, width, height, color)
         text_width = len(label) * 6 - 1
-        draw_text(canvas, x + (width - text_width) // 2, y + 2,
+        draw_text(canvas, ox + x + (width - text_width) // 2, oy + y + 2,
                   label, text_color)
 
-    draw_text(canvas, 16, 170, "X LEFT EYE", GRAY)
-    draw_text(canvas, 160, 170, "Y RIGHT EYE", GRAY)
-    draw_text(canvas, 16, 184, "A BOTH EYES", GRAY)
-    draw_text(canvas, 160, 184, "B TONE", GRAY)
-    draw_text(canvas, 16, 198, f"UP/DN {frequency}HZ", WHITE)
-    draw_text(canvas, 160, 198, f"LT/RT LIGHT {brightness}/11", WHITE)
-    centered_text(canvas, 220, "ST COLOR  SEL+ST EXIT", GREEN)
+    draw_text(canvas, ox + 16, oy + 170, "X LEFT EYE", GRAY)
+    draw_text(canvas, ox + 160, oy + 170, "Y RIGHT EYE", GRAY)
+    draw_text(canvas, ox + 16, oy + 184, "A BOTH EYES", GRAY)
+    draw_text(canvas, ox + 160, oy + 184, "B TONE", GRAY)
+    draw_text(canvas, ox + 16, oy + 198, f"UP/DN {frequency}HZ", WHITE)
+    draw_text(canvas, ox + 160, oy + 198, f"LT/RT LIGHT {brightness}/11", WHITE)
+    centered_text(canvas, oy + 220, "ST COLOR  SEL+ST EXIT", GREEN)
     present_canvas(framebuffer, canvas)
 
 
