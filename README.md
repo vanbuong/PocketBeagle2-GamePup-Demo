@@ -134,10 +134,11 @@ The system-artwork bezel strips in `emulator/bezels/` are still 320 pixels wide 
 stretched horizontally (nearest neighbour) if a band is shown; the bands only
 appear for wide sources, so they rarely show on 480x272.
 
-The optional second screen is a **128x64 SH1106** mono OLED on I2C2. Both its
-status dashboard and GIF mode render at 128x64; it does not mirror the main LCD.
-The EC11 encoder on the Click control pins adjusts brightness and toggles GIF
-mode.
+The optional second screen is either the **Tang Nano 9K's on-board 1.14" ST7789**
+(240x135 colour, `gamepup-display fpga-small`) or a **128x64 SH1106** mono OLED on I2C2.
+Its status dashboard and GIF mode render at the panel's own size (240x135 colour or
+128x64 mono); it does not mirror the main LCD. The EC11 encoder on the Click control
+pins adjusts brightness and toggles GIF mode.
 
 ## One-command install
 
@@ -497,10 +498,25 @@ tone. The tester intentionally writes straight to the PWM buzzer and therefore
 works even when game/menu audio is muted. It switches the LEDs and buzzer off
 and restores the original backlight level when it exits.
 
-## SH1106 OLED status display
+## Second-screen status display (ST7789 or SH1106)
 
-A 1.3" 128x64 SH1106 OLED on the GamePup mikroBUS I2C lines (`/dev/i2c-2` @
-`0x3c`) is driven independently from the main LCD. The `gamepup-oled-status`
+`gamepup-oled-status` drives a second screen independently from the main LCD, with two
+backends chosen automatically (`GAMEPUP_OLED_BACKEND=auto|fb|i2c`):
+
+| backend | display | how |
+|---|---|---|
+| `fb` | Tang Nano 9K on-board 1.14" ST7789, 240x135 **colour** | Linux framebuffer of the small panel (`gamepup-display fpga-small`, see above); `GAMEPUP_OLED_FB=/dev/fbN` to pick one |
+| `i2c` | 1.3" 128x64 SH1106 mono OLED | `/dev/i2c-2` @ `0x3c` |
+
+`auto` uses the 240x135 framebuffer when there is one, else I2C. On the ST7789 the
+dashboard is redrawn in colour (bars turn yellow/red as usage rises, the GIF keeps its
+colours), the brightness setting dims in software (the panel's backlight is fixed on
+the board), and only changed rows are sent over SPI. This backend is checked by a host
+test (`make -C emulator test`) that renders into a fake framebuffer, not on the real
+panel.
+
+The SH1106 on the GamePup mikroBUS I2C lines (`/dev/i2c-2` @
+`0x3c`) works as before. The `gamepup-oled-status`
 service is adjustable from 5–30 Hz and shows the live AM625 clock frequency,
 CPU and RAM percentages, live GPU utilization, and the measured emulator or
 benchmark frame rate. The bottom line identifies the current activity as
@@ -515,7 +531,7 @@ controls the second screen directly:
 | Rotate | Brightness 1–8 (writes `/opt/gamepup/saves/oled-brightness`) |
 | Click | Toggle status ↔ GIF mode |
 
-Wire the OLED to mikroBUS **SDA/SCL** (PocketBeagle 2 `I2C2` on P1.26/P1.28)
+For the I2C backend, wire the OLED to mikroBUS **SDA/SCL** (PocketBeagle 2 `I2C2` on P1.26/P1.28)
 and the encoder to **AN**, **INT**, and **RST**. Override the bus or address
 with `GAMEPUP_OLED_I2C` / `GAMEPUP_OLED_ADDR` if needed. After each frame the
 service refreshes only changed 8-pixel pages. The service is enabled by

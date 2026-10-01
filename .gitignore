@@ -36,3 +36,4 @@ __pycache__/
 emulator/bezels/*-photo.rgb
 
 emulator/tests/test_retro_geometry
+emulator/tests/test_oled_status

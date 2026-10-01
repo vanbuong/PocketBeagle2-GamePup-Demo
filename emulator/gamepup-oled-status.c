@@ -1,12 +1,18 @@
 /*
  * SPDX-License-Identifier: GPL-2.0-only
  *
- * System status display for a 1.3" 128x64 SH1106 I2C OLED on PocketBeagle 2
- * + GamePup A4, with optional EC11 rotary-encoder controls.
+ * System status display on PocketBeagle 2 + GamePup A4, with optional EC11
+ * rotary-encoder controls.  Two backends:
  *
- * Display: /dev/i2c-2 @ 0x3C (SH1106, 128x64 monochrome)
+ *   fb   the Tang Nano 9K's on-board 1.14" ST7789, 240x135 colour, as a Linux
+ *        framebuffer (SPI, via the FPGA; see fpga/tang-nano-9k/README.md)
+ *   i2c  1.3" 128x64 SH1106 monochrome OLED on /dev/i2c-2 @ 0x3C
+ *
+ * GAMEPUP_OLED_BACKEND=auto|fb|i2c (default auto: the 240x135 framebuffer if there is
+ * one, else I2C).  GAMEPUP_OLED_FB overrides the framebuffer device.
+ *
  * Encoder: input device "gamepup-encoder" (REL_DIAL + KEY_ENTER)
- *   Rotate  = brightness 1–8
+ *   Rotate  = brightness 1–8 (fb backend: software dimming, the panel's backlight is fixed)
  *   Click   = toggle status ↔ GIF mode
  */
 
@@ -17,6 +23,7 @@
 #include <gif_lib.h>
 #include <glob.h>
 #include <limits.h>
+#include <linux/fb.h>
 #include <linux/input.h>
 #include <poll.h>
 #include <signal.h>
@@ -55,6 +62,10 @@
 #define MAX_CPU_CORES 4
 #define MAX_GIF_FRAMES 256
 
+/* Colour backend: the Tang Nano 9K's 1.14" ST7789 in landscape. */
+#define COLOR_WIDTH 240
+#define COLOR_HEIGHT 135
+
 #ifndef I2C_SLAVE
 #define I2C_SLAVE 0x0703
 #endif
@@ -69,9 +80,28 @@ static int encoder_fds[MAX_ENCODER_FDS];
 static size_t encoder_fd_count;
 static uint8_t i2c_addr = I2C_ADDR_DEFAULT;
 static uint8_t canvas[OLED_WIDTH * OLED_HEIGHT];
+static uint32_t color_canvas[COLOR_WIDTH * COLOR_HEIGHT];	/* XRGB8888 */
 static uint8_t presented_pages[OLED_FB_SIZE];
 static bool presented_valid;
 static volatile sig_atomic_t keep_running = 1;
+
+enum backend {
+	BACKEND_I2C,
+	BACKEND_FB,
+};
+static enum backend backend = BACKEND_I2C;
+
+/* Framebuffer backend state. */
+static int fb_fd = -1;
+static unsigned fb_hw_width;
+static unsigned fb_hw_height;
+static unsigned fb_hw_stride;
+static unsigned fb_hw_bpp;
+static uint8_t *fb_present;
+static uint8_t *fb_prev;
+static size_t fb_present_size;
+static bool fb_prev_valid;
+static unsigned fb_dim = 256;		/* brightness factor, 256 = full */
 
 static void stop_handler(int signal_number)
 {
@@ -170,9 +200,10 @@ static void draw_text(int x, int y, const char *text, int scale, uint8_t color)
 }
 
 struct gif_animation {
-	uint8_t *frames;
+	uint8_t *frames;	/* frame_bytes each: mono 128x64 bytes, or XRGB 240x135 */
 	unsigned *delays_ms;
 	size_t frame_count;
+	size_t frame_bytes;
 	char path[PATH_MAX];
 };
 
@@ -215,13 +246,48 @@ static void scale_gif_frame_mono(const uint8_t *source, int source_width,
 	}
 }
 
-static bool load_gif_animation(const char *path, struct gif_animation *animation)
+static void scale_gif_frame_color(const uint32_t *source, int source_width,
+				  int source_height, uint32_t *destination)
+{
+	int scaled_width = COLOR_WIDTH;
+	int scaled_height = source_height * COLOR_WIDTH / source_width;
+	int offset_x;
+	int offset_y;
+
+	if (scaled_height > COLOR_HEIGHT) {
+		scaled_height = COLOR_HEIGHT;
+		scaled_width = source_width * COLOR_HEIGHT / source_height;
+	}
+	if (scaled_width < 1)
+		scaled_width = 1;
+	if (scaled_height < 1)
+		scaled_height = 1;
+	offset_x = (COLOR_WIDTH - scaled_width) / 2;
+	offset_y = (COLOR_HEIGHT - scaled_height) / 2;
+	memset(destination, 0, (size_t)COLOR_WIDTH * COLOR_HEIGHT * sizeof(*destination));
+	for (int y = 0; y < scaled_height; ++y) {
+		int source_y = y * source_height / scaled_height;
+
+		for (int x = 0; x < scaled_width; ++x) {
+			int source_x = x * source_width / scaled_width;
+
+			destination[(offset_y + y) * COLOR_WIDTH + offset_x + x] =
+				source[source_y * source_width + source_x];
+		}
+	}
+}
+
+static bool load_gif_animation(const char *path, struct gif_animation *animation,
+			       bool color)
 {
 	int error = 0;
 	GifFileType *gif = DGifOpenFileName(path, &error);
 	GraphicsControlBlock control;
 	size_t capacity = 8;
 	uint8_t *gray = NULL;
+	uint32_t *rgb = NULL;
+	size_t frame_bytes = color ? (size_t)COLOR_WIDTH * COLOR_HEIGHT * sizeof(uint32_t) :
+				     (size_t)OLED_WIDTH * OLED_HEIGHT;
 	int canvas_width;
 	int canvas_height;
 
@@ -239,11 +305,16 @@ static bool load_gif_animation(const char *path, struct gif_animation *animation
 		DGifCloseFile(gif, &error);
 		return false;
 	}
-	gray = calloc((size_t)canvas_width * (size_t)canvas_height, 1);
-	animation->frames = calloc(capacity, OLED_WIDTH * OLED_HEIGHT);
+	if (color)
+		rgb = calloc((size_t)canvas_width * (size_t)canvas_height, sizeof(*rgb));
+	else
+		gray = calloc((size_t)canvas_width * (size_t)canvas_height, 1);
+	animation->frames = calloc(capacity, frame_bytes);
 	animation->delays_ms = calloc(capacity, sizeof(*animation->delays_ms));
-	if (!gray || !animation->frames || !animation->delays_ms) {
+	animation->frame_bytes = frame_bytes;
+	if ((!gray && !rgb) || !animation->frames || !animation->delays_ms) {
 		free(gray);
+		free(rgb);
 		free_gif_animation(animation);
 		DGifCloseFile(gif, &error);
 		return false;
@@ -261,8 +332,7 @@ static bool load_gif_animation(const char *path, struct gif_animation *animation
 
 		if (animation->frame_count == capacity) {
 			size_t next = capacity * 2;
-			uint8_t *frames = realloc(animation->frames,
-						  next * OLED_WIDTH * OLED_HEIGHT);
+			uint8_t *frames = realloc(animation->frames, next * frame_bytes);
 			unsigned *delays = realloc(animation->delays_ms,
 						   next * sizeof(*delays));
 
@@ -290,26 +360,44 @@ static bool load_gif_animation(const char *path, struct gif_animation *animation
 			for (int x = 0; x < image->ImageDesc.Width; ++x) {
 				int dest_x = image->ImageDesc.Left + x;
 				int index = image->RasterBits[y * image->ImageDesc.Width + x];
-				GifColorType color;
+				GifColorType pixel_color;
 
 				if (dest_x < 0 || dest_x >= canvas_width)
 					continue;
 				if (index == transparent || !map || index >= map->ColorCount)
 					continue;
-				color = map->Colors[index];
-				gray[dest_y * canvas_width + dest_x] =
-					(uint8_t)((color.Red * 30 + color.Green * 59 +
-						   color.Blue * 11) / 100);
+				pixel_color = map->Colors[index];
+				if (rgb)
+					rgb[dest_y * canvas_width + dest_x] =
+						((uint32_t)pixel_color.Red << 16) |
+						((uint32_t)pixel_color.Green << 8) |
+						pixel_color.Blue;
+				else
+					gray[dest_y * canvas_width + dest_x] =
+						(uint8_t)((pixel_color.Red * 30 +
+							   pixel_color.Green * 59 +
+							   pixel_color.Blue * 11) / 100);
 			}
 		}
-		scale_gif_frame_mono(gray, canvas_width, canvas_height,
-				     animation->frames +
-				     animation->frame_count * OLED_WIDTH * OLED_HEIGHT);
+		if (rgb)
+			scale_gif_frame_color(rgb, canvas_width, canvas_height,
+					      (uint32_t *)(void *)(animation->frames +
+					      animation->frame_count * frame_bytes));
+		else
+			scale_gif_frame_mono(gray, canvas_width, canvas_height,
+					     animation->frames +
+					     animation->frame_count * frame_bytes);
 		animation->delays_ms[animation->frame_count++] = delay_ms < 20 ? 20 : delay_ms;
-		if (disposal == DISPOSE_BACKGROUND)
-			memset(gray, 0, (size_t)canvas_width * (size_t)canvas_height);
+		if (disposal == DISPOSE_BACKGROUND) {
+			if (rgb)
+				memset(rgb, 0, (size_t)canvas_width * (size_t)canvas_height *
+					       sizeof(*rgb));
+			else
+				memset(gray, 0, (size_t)canvas_width * (size_t)canvas_height);
+		}
 	}
 	free(gray);
+	free(rgb);
 	DGifCloseFile(gif, &error);
 	return animation->frame_count > 0;
 }
@@ -958,6 +1046,348 @@ static void render_status(unsigned cpu, unsigned ram,
 	draw_text(x, 56, mode, 1, PIXEL_ON);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Colour (framebuffer) backend: 240x135 ST7789                              */
+/* ------------------------------------------------------------------------- */
+
+#define COL_BG 0x00000000u
+#define COL_TEXT 0x00f4f4e8u
+#define COL_LABEL 0x00708078u
+#define COL_GREEN 0x0042d65cu
+#define COL_DARK_GREEN 0x00123d22u
+#define COL_YELLOW 0x00f4d35eu
+#define COL_RED 0x00e85d5du
+#define COL_BAR_BG 0x00182420u
+
+static void cfill_rect(int x, int y, int width, int height, uint32_t color)
+{
+	int x0 = x < 0 ? 0 : x;
+	int y0 = y < 0 ? 0 : y;
+	int x1 = x + width > COLOR_WIDTH ? COLOR_WIDTH : x + width;
+	int y1 = y + height > COLOR_HEIGHT ? COLOR_HEIGHT : y + height;
+
+	for (int row = y0; row < y1; ++row)
+		for (int column = x0; column < x1; ++column)
+			color_canvas[row * COLOR_WIDTH + column] = color;
+}
+
+static void cdraw_text(int x, int y, const char *text, int scale, uint32_t color)
+{
+	for (; *text; ++text, x += 6 * scale) {
+		const uint8_t *glyph = find_glyph(*text >= 'a' && *text <= 'z' ?
+						  (char)(*text - 'a' + 'A') : *text);
+
+		for (int column = 0; column < 5; ++column)
+			for (int row = 0; row < 7; ++row)
+				if (glyph[column] & (1u << row))
+					cfill_rect(x + column * scale, y + row * scale,
+						   scale, scale, color);
+	}
+}
+
+static uint32_t usage_color(unsigned percent)
+{
+	return percent >= 85 ? COL_RED : percent >= 60 ? COL_YELLOW : COL_GREEN;
+}
+
+static void cdraw_bar(int x, int y, int width, int height, unsigned percent)
+{
+	int filled = percent > 100 ? width : (int)(percent * (unsigned)width / 100);
+
+	cfill_rect(x, y, width, height, COL_BAR_BG);
+	cfill_rect(x, y, filled, height, usage_color(percent));
+}
+
+/* Label on the left, value right-aligned to x_right, both at scale 2. */
+static void cdraw_row(int y, const char *label, const char *value, uint32_t color,
+		      int x_left, int x_right)
+{
+	cdraw_text(x_left, y, label, 2, COL_LABEL);
+	cdraw_text(x_right - text_width(value, 2), y, value, 2, color);
+}
+
+static void render_status_color(unsigned cpu, unsigned ram,
+				unsigned ram_used, unsigned ram_total,
+				unsigned gpu, bool gpu_available, const char *mode,
+				double fps, double frequency_ghz,
+				bool show_clock, bool per_core, bool show_gpu,
+				const unsigned *core_usage, unsigned core_count)
+{
+	const int left = 8;
+	const int right = COLOR_WIDTH - 8;
+	char text[40];
+
+	cfill_rect(0, 0, COLOR_WIDTH, COLOR_HEIGHT, COL_BG);
+	if (show_clock)
+		snprintf(text, sizeof(text), "AM625 @%.1fGHZ", frequency_ghz);
+	else
+		snprintf(text, sizeof(text), "POCKETBEAGLE 2");
+	cdraw_text((COLOR_WIDTH - text_width(text, 2)) / 2, 3, text, 2, COL_GREEN);
+	cfill_rect(4, 20, COLOR_WIDTH - 8, 1, COL_DARK_GREEN);
+
+	/* Vertical positions: the per-core grid needs more room than the single CPU bar. */
+	int ram_y = per_core ? 63 : 55;
+	int ram_bar_y = per_core ? 79 : 72;
+	int row3_y = per_core ? 89 : 86;
+
+	if (per_core) {
+		for (unsigned core = 0; core < core_count && core < MAX_CPU_CORES; ++core) {
+			int column = (int)(core % 2);
+			int row = (int)(core / 2);
+			int x = left + column * 116;
+			int y = 24 + row * 19;
+
+			snprintf(text, sizeof(text), "C%u", core);
+			cdraw_text(x, y, text, 2, COL_LABEL);
+			snprintf(text, sizeof(text), "%u%%", core_usage[core]);
+			cdraw_text(x + 108 - text_width(text, 2), y, text, 2,
+				   usage_color(core_usage[core]));
+			cdraw_bar(x, y + 14, 108, 3, core_usage[core]);
+		}
+	} else {
+		snprintf(text, sizeof(text), "%u%%", cpu);
+		cdraw_row(25, "CPU", text, usage_color(cpu), left, right);
+		cdraw_bar(left, 42, right - left, 8, cpu);
+	}
+
+	snprintf(text, sizeof(text), "%u%%", ram);
+	cdraw_row(ram_y, "RAM", text, usage_color(ram), left, right);
+	cdraw_bar(left, ram_bar_y, right - left, per_core ? 6 : 8, ram);
+
+	if (show_gpu) {
+		cdraw_text(left, row3_y, "GPU", 2, COL_LABEL);
+		if (gpu_available)
+			snprintf(text, sizeof(text), "%u%%", gpu);
+		else
+			snprintf(text, sizeof(text), "--");
+		cdraw_text(left + 40, row3_y, text, 2,
+			   gpu_available ? usage_color(gpu) : COL_LABEL);
+	} else {
+		snprintf(text, sizeof(text), "%u/%uM", ram_used, ram_total);
+		cdraw_text(left, row3_y, text, 2, COL_TEXT);
+	}
+	snprintf(text, sizeof(text), fps >= 999.5 ? "999" : fps >= 99.95 ? "%.0f" : "%.1f", fps);
+	cdraw_text(right - text_width(text, 2), row3_y, text, 2, COL_YELLOW);
+	cdraw_text(right - text_width(text, 2) - 6 - text_width("FPS", 2), row3_y, "FPS", 2,
+		   COL_LABEL);
+
+	cfill_rect(4, 106, COLOR_WIDTH - 8, 1, COL_DARK_GREEN);
+	cdraw_text((COLOR_WIDTH - text_width(mode, 2)) / 2, 114, mode, 2, COL_GREEN);
+}
+
+static void render_gif_error_color(void)
+{
+	cfill_rect(0, 0, COLOR_WIDTH, COLOR_HEIGHT, COL_BG);
+	cdraw_text((COLOR_WIDTH - text_width("GIF ERROR", 2)) / 2, 36, "GIF ERROR", 2, COL_RED);
+	cdraw_text((COLOR_WIDTH - text_width("ADD GIF FILE", 2)) / 2, 62, "ADD GIF FILE", 2,
+		   COL_TEXT);
+	cdraw_text((COLOR_WIDTH - text_width("IN SETTINGS", 2)) / 2, 84, "IN SETTINGS", 2,
+		   COL_TEXT);
+}
+
+/*
+ * First /dev/fbN that is a 240x135 panel (the Tang Nano 9K's ST7789), or the
+ * GAMEPUP_OLED_FB override.  Returns NULL when there is none.
+ */
+static const char *find_color_framebuffer(void)
+{
+	static char path[64];
+	const char *override = getenv("GAMEPUP_OLED_FB");
+
+	if (override && override[0])
+		return override;
+	for (unsigned index = 0; index < 8; ++index) {
+		char node[64];
+		unsigned width, height;
+		FILE *file;
+		int fields;
+
+		snprintf(node, sizeof(node), "/sys/class/graphics/fb%u/virtual_size", index);
+		file = fopen(node, "r");
+		if (!file)
+			continue;
+		fields = fscanf(file, "%u,%u", &width, &height);
+		fclose(file);
+		if (fields == 2 && width == COLOR_WIDTH && height == COLOR_HEIGHT) {
+			snprintf(path, sizeof(path), "/dev/fb%u", index);
+			return path;
+		}
+	}
+	return NULL;
+}
+
+static bool open_color_framebuffer(void)
+{
+	struct fb_var_screeninfo variable;
+	struct fb_fix_screeninfo fixed;
+	const char *path = find_color_framebuffer();
+
+	if (!path)
+		return false;
+	fb_fd = open(path, O_RDWR | O_CLOEXEC);
+	if (fb_fd < 0 || ioctl(fb_fd, FBIOGET_VSCREENINFO, &variable) < 0 ||
+	    ioctl(fb_fd, FBIOGET_FSCREENINFO, &fixed) < 0) {
+		perror(path);
+		if (fb_fd >= 0)
+			close(fb_fd);
+		fb_fd = -1;
+		return false;
+	}
+	fb_hw_width = variable.xres;
+	fb_hw_height = variable.yres;
+	fb_hw_bpp = variable.bits_per_pixel;
+	fb_hw_stride = fixed.line_length;
+	if (fb_hw_width != COLOR_WIDTH || fb_hw_height != COLOR_HEIGHT ||
+	    (fb_hw_bpp != 16 && fb_hw_bpp != 32)) {
+		fprintf(stderr, "%s: need a 240x135 16/32 bpp framebuffer, got %ux%u/%u bpp\n",
+			path, fb_hw_width, fb_hw_height, fb_hw_bpp);
+		close(fb_fd);
+		fb_fd = -1;
+		return false;
+	}
+	fb_present_size = (size_t)fb_hw_stride * fb_hw_height;
+	fb_present = calloc(1, fb_present_size);
+	fb_prev = calloc(1, fb_present_size);
+	if (!fb_present || !fb_prev) {
+		perror("calloc framebuffer");
+		exit(EXIT_FAILURE);
+	}
+	fb_prev_valid = false;
+	fprintf(stderr, "Using %s (%ux%u, %u bpp) for the status display.\n", path,
+		fb_hw_width, fb_hw_height, fb_hw_bpp);
+	return true;
+}
+
+static uint32_t dim_color(uint32_t color)
+{
+	unsigned red = (((color >> 16) & 0xff) * fb_dim) >> 8;
+	unsigned green = (((color >> 8) & 0xff) * fb_dim) >> 8;
+	unsigned blue = ((color & 0xff) * fb_dim) >> 8;
+
+	return (red << 16) | (green << 8) | blue;
+}
+
+/* Convert the colour canvas (with software dimming) and send only the changed rows. */
+static void color_present(void)
+{
+	size_t start = 0;
+	size_t end = fb_present_size;
+	size_t written;
+
+	for (unsigned y = 0; y < COLOR_HEIGHT; ++y) {
+		for (unsigned x = 0; x < COLOR_WIDTH; ++x) {
+			uint32_t color = dim_color(color_canvas[y * COLOR_WIDTH + x]);
+
+			if (fb_hw_bpp == 16) {
+				uint16_t value = (uint16_t)(((color >> 19) & 0x1f) << 11 |
+							    ((color >> 10) & 0x3f) << 5 |
+							    ((color >> 3) & 0x1f));
+
+				memcpy(fb_present + (size_t)y * fb_hw_stride + x * 2, &value, 2);
+			} else {
+				memcpy(fb_present + (size_t)y * fb_hw_stride + x * 4, &color, 4);
+			}
+		}
+	}
+	if (fb_prev_valid) {
+		unsigned first = fb_hw_height, last = 0;
+
+		for (unsigned y = 0; y < fb_hw_height; ++y) {
+			if (memcmp(fb_present + (size_t)y * fb_hw_stride,
+				   fb_prev + (size_t)y * fb_hw_stride, fb_hw_stride) == 0)
+				continue;
+			if (first == fb_hw_height)
+				first = y;
+			last = y;
+		}
+		if (first == fb_hw_height)
+			return;
+		start = (size_t)first * fb_hw_stride;
+		end = (size_t)(last + 1) * fb_hw_stride;
+	}
+	written = start;
+	while (written < end) {
+		ssize_t result = pwrite(fb_fd, fb_present + written, end - written,
+					(off_t)written);
+
+		if (result < 0 && errno == EINTR)
+			continue;
+		if (result <= 0) {
+			perror("pwrite framebuffer");
+			exit(EXIT_FAILURE);
+		}
+		written += (size_t)result;
+	}
+	memcpy(fb_prev + start, fb_present + start, end - start);
+	fb_prev_valid = true;
+}
+
+/* ---- backend-neutral helpers used by main() ---- */
+
+static void display_set_brightness(unsigned brightness)
+{
+	if (backend == BACKEND_FB)
+		fb_dim = brightness * 32;		/* 1..8 -> 12%..100% */
+	else
+		oled_set_contrast(contrast_for_brightness(brightness));
+}
+
+static void display_initialize(unsigned brightness)
+{
+	if (backend == BACKEND_FB) {
+		fb_dim = brightness * 32;
+		fb_prev_valid = false;
+	} else {
+		oled_initialize(contrast_for_brightness(brightness));
+	}
+}
+
+static void display_off(void)
+{
+	if (backend == BACKEND_FB) {
+		cfill_rect(0, 0, COLOR_WIDTH, COLOR_HEIGHT, COL_BG);
+		color_present();
+	} else {
+		oled_display_off();
+	}
+}
+
+static void display_present(void)
+{
+	if (backend == BACKEND_FB)
+		color_present();
+	else
+		oled_present();
+}
+
+static void display_gif_error(void)
+{
+	if (backend == BACKEND_FB)
+		render_gif_error_color();
+	else
+		render_gif_error();
+}
+
+static void choose_backend(void)
+{
+	const char *wanted = getenv("GAMEPUP_OLED_BACKEND");
+	bool want_fb = !wanted || !wanted[0] || strcmp(wanted, "auto") == 0 ||
+		       strcmp(wanted, "fb") == 0;
+	bool force_fb = wanted && strcmp(wanted, "fb") == 0;
+
+	if (want_fb && open_color_framebuffer()) {
+		backend = BACKEND_FB;
+		return;
+	}
+	if (force_fb) {
+		fprintf(stderr, "GAMEPUP_OLED_BACKEND=fb but no 240x135 framebuffer found.\n");
+		exit(EXIT_FAILURE);
+	}
+	backend = BACKEND_I2C;
+	open_i2c();
+}
+
+
 static void sleep_until_or_input(const struct timespec *deadline)
 {
 	for (;;) {
@@ -1075,11 +1505,11 @@ int main(void)
 	signal(SIGTERM, stop_handler);
 	signal(SIGHUP, stop_handler);
 
-	open_i2c();
+	choose_backend();
 	open_encoder();
 	config = read_display_config();
 	if (config.enabled) {
-		oled_initialize(contrast_for_brightness(config.brightness));
+		display_initialize(config.brightness);
 		oled_active = true;
 		applied_brightness = config.brightness;
 		read_cpu_snapshot(&previous);
@@ -1126,18 +1556,18 @@ int main(void)
 		config = new_config;
 		if (!config.enabled) {
 			if (oled_active) {
-				oled_display_off();
+				display_off();
 				oled_active = false;
 			}
 			continue;
 		}
 		if (!oled_active) {
-			oled_initialize(contrast_for_brightness(config.brightness));
+			display_initialize(config.brightness);
 			oled_active = true;
 			applied_brightness = config.brightness;
 			read_cpu_snapshot(&previous);
 		} else if (applied_brightness != config.brightness) {
-			oled_set_contrast(contrast_for_brightness(config.brightness));
+			display_set_brightness(config.brightness);
 			applied_brightness = config.brightness;
 		}
 		if (config.gif_mode) {
@@ -1146,20 +1576,20 @@ int main(void)
 
 			if (!selected_gif_path(gif_path, sizeof(gif_path))) {
 				free_gif_animation(&animation);
-				render_gif_error();
-				oled_present();
+				display_gif_error();
+				display_present();
 				continue;
 			}
 			if (strcmp(gif_path, animation.path) != 0) {
-				load_gif_animation(gif_path, &animation);
+				load_gif_animation(gif_path, &animation, backend == BACKEND_FB);
 				gif_frame = 0;
 				gif_deadline.tv_sec = 0;
 				gif_deadline.tv_nsec = 0;
 			}
 			if (!animation.frame_count ||
 			    clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
-				render_gif_error();
-				oled_present();
+				display_gif_error();
+				display_present();
 				continue;
 			}
 			if (!gif_deadline.tv_sec && !gif_deadline.tv_nsec) {
@@ -1172,10 +1602,15 @@ int main(void)
 				add_milliseconds(&gif_deadline,
 						 animation.delays_ms[gif_frame]);
 			}
-			memcpy(canvas,
-			       animation.frames + gif_frame * OLED_WIDTH * OLED_HEIGHT,
-			       sizeof(canvas));
-			oled_present();
+			if (backend == BACKEND_FB)
+				memcpy(color_canvas,
+				       animation.frames + gif_frame * animation.frame_bytes,
+				       sizeof(color_canvas));
+			else
+				memcpy(canvas,
+				       animation.frames + gif_frame * animation.frame_bytes,
+				       sizeof(canvas));
+			display_present();
 			continue;
 		}
 		if (read_cpu_snapshot(&current)) {
@@ -1191,18 +1626,22 @@ int main(void)
 		gpu_available = read_gpu_usage(&gpu);
 		read_fps(mode, sizeof(mode), &fps);
 		frequency_ghz = read_cpu_frequency_ghz();
-		render_status(cpu, ram, ram_used, ram_total, gpu, gpu_available,
+		(backend == BACKEND_FB ? render_status_color : render_status)(
+			      cpu, ram, ram_used, ram_total, gpu, gpu_available,
 			      mode, fps, frequency_ghz, config.show_clock,
 			      config.per_core, config.show_gpu,
 			      core_usage, core_count);
-		oled_present();
+		display_present();
 	}
 
 	if (oled_active)
-		oled_display_off();
+		display_off();
 	free_gif_animation(&animation);
 	for (size_t index = 0; index < encoder_fd_count; ++index)
 		close(encoder_fds[index]);
-	close(i2c_fd);
+	if (i2c_fd >= 0)
+		close(i2c_fd);
+	if (fb_fd >= 0)
+		close(fb_fd);
 	return EXIT_SUCCESS;
 }

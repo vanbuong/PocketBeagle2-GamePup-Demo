@@ -27,12 +27,14 @@ gamepup-gpu-bench: gamepup-gpu-bench.c
 
 # Host-side checks (no hardware, no GL): game scaling for 320x240 and 480x272, the
 # changed-rows framebuffer writer, and framebuffer discovery.  Needs libretro.h (LIBRETRO_INCLUDE).
-test: tests/test_retro_geometry.c gamepup-retro.c
+test: tests/test_retro_geometry.c tests/test_oled_status.c gamepup-retro.c gamepup-oled-status.c
 	$(CC) -std=gnu11 -O1 -I$(LIBRETRO_INCLUDE) -I$(KHRONOS_INCLUDE) \
 		-Wl,--unresolved-symbols=ignore-all -o tests/test_retro_geometry \
 		tests/test_retro_geometry.c $(LDLIBS)
 	./tests/test_retro_geometry
 	python3 tests/test_fb_discovery.py
+	$(CC) -std=gnu11 -O1 -Wall -Wextra -o tests/test_oled_status tests/test_oled_status.c -lgif
+	./tests/test_oled_status gifs/bongo-cat.gif
 
 clean:
-	rm -f gamepup-retro gamepup-oled-status gamepup-gpu-bench tests/test_retro_geometry
+	rm -f gamepup-retro gamepup-oled-status gamepup-gpu-bench tests/test_retro_geometry tests/test_oled_status
