@@ -34,6 +34,9 @@ bool hal_open(void);
 void hal_close(void);
 bool hal_is_open(void);
 void hal_headless_start(void);
+/* Interactive SDL2 window (build with `make sim`). Returns false if SDL fails. */
+bool hal_sim_start(void);
+bool hal_sim_quit_requested(void);
 /* Dump the last rendered frame as a PPM (headless mode only). */
 bool hal_headless_dump(const char *path);
 void hal_inject_key(uint32_t key, bool pressed);

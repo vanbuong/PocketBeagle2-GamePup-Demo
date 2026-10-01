@@ -131,11 +131,14 @@ static int run_script(const char *outdir, const char *script)
 int main(int argc, char **argv)
 {
 	const char *headless_dir = NULL, *script = "shot:home";
+	bool sim = false;
 	ui_page_t *home;
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--headless") && i + 1 < argc)
 			headless_dir = argv[++i];
+		else if (!strcmp(argv[i], "--sim"))
+			sim = true;
 		else if (!strcmp(argv[i], "--script") && i + 1 < argc)
 			script = argv[++i];
 		else if (!strcmp(argv[i], "--version")) {
@@ -146,11 +149,14 @@ int main(int argc, char **argv)
 			printf("%d games\n", ui_games_total());
 			return 0;
 		} else {
-			fprintf(stderr, "usage: %s [--headless DIR [--script STEPS]]\n", argv[0]);
+			fprintf(stderr, "usage: %s [--sim | --headless DIR [--script STEPS]]\n", argv[0]);
 			return 2;
 		}
 	}
 
+	if (sim && !getenv("GAMEPUP_ROOT")) {
+		fprintf(stderr, "sim: set GAMEPUP_ROOT to a sample tree (see README) to avoid touching /opt\n");
+	}
 	signal(SIGINT, stop_handler);
 	signal(SIGTERM, stop_handler);
 	signal(SIGPIPE, SIG_IGN);
@@ -159,6 +165,12 @@ int main(int argc, char **argv)
 	if (headless_dir) {
 		lv_tick_set_cb(fake_tick);
 		hal_headless_start();
+	} else if (sim) {
+		lv_tick_set_cb(hal_now_ms);
+		if (!hal_sim_start()) {
+			fprintf(stderr, "simulator unavailable (build with: make -C emulator sim)\n");
+			return 1;
+		}
 	} else {
 		lv_tick_set_cb(hal_now_ms);
 		hal_claim_display();
@@ -167,6 +179,8 @@ int main(int argc, char **argv)
 			return 1;
 		lv_indev_set_long_press_time(hal_keypad(), 800);
 	}
+	if (sim)
+		lv_indev_set_long_press_time(hal_keypad(), 800);
 	home = ui_build_home();
 	ui_set_root(home);
 	lv_timer_create(import_watch, 1000, NULL);
@@ -178,7 +192,7 @@ int main(int argc, char **argv)
 		return rc;
 	}
 
-	while (running && !exit_requested) {
+	while (running && !exit_requested && !hal_sim_quit_requested()) {
 		uint32_t wait = lv_timer_handler();
 
 		hal_wait(wait > 20 ? 20 : (wait < 2 ? 2 : wait));

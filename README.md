@@ -505,6 +505,18 @@ GAMEPUP_ROOT=/tmp/sample ./emulator/gamepup-ui --headless /tmp/shots \
     --script "right*7;enter;shot:settings"   # writes /tmp/shots/settings.ppm
 ```
 
+For an interactive preview on a desktop, build the SDL2 simulator
+(`sudo apt install libsdl2-dev`) and point it at a sample data tree:
+
+```sh
+make -C emulator sim
+GAMEPUP_ROOT=/tmp/sample ./emulator/gamepup-ui-sim --sim
+```
+
+Keys: arrows move, **Enter/Z** = A, **Esc/Backspace** = B, **X** = Home,
+**C** = Y, **S** = Start, **D** = Select. Games, `mpv` and audio devices are not
+launched in the simulator.
+
 `install.sh` builds `gamepup-ui` and falls back to the legacy Python
 `gamepup-menu` if LVGL cannot be fetched or compiled.
 

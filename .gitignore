@@ -37,3 +37,5 @@ emulator/bezels/*-photo.rgb
 emulator/gamepup-ui
 emulator/ui/lvgl/
 emulator/ui/build/
+emulator/gamepup-ui-sim
+emulator/ui/build-sim/

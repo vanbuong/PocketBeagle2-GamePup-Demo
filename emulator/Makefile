@@ -7,7 +7,7 @@ CFLAGS += -std=c11 -Wall -Wextra -Wpedantic \
 	-I$(LIBRETRO_INCLUDE) -I$(KHRONOS_INCLUDE)
 LDLIBS += -ldl -lasound
 
-.PHONY: all clean gles apps ui gamepup-ui gamepup-ui.bin
+.PHONY: all clean gles apps ui gamepup-ui gamepup-ui.bin sim gamepup-ui-sim.bin
 
 # GLES targets need libEGL/libGLESv2 at link time (TI PVR or Mesa).
 all: gamepup-oled-status gamepup-retro gamepup-gpu-bench
@@ -56,6 +56,23 @@ gamepup-ui: $(LVGL_DIR)/lvgl.h
 gamepup-ui.bin: $(UI_OBJS) $(LVGL_OBJS)
 	$(CC) -o gamepup-ui $^ $(LDFLAGS) -lm
 
+# Desktop simulator: same UI code in an SDL2 window (needs libsdl2-dev).
+SIM_BUILD := $(UI_DIR)/build-sim
+SIM_CFLAGS := $(UI_CFLAGS) -DGAMEPUP_SIM $(shell pkg-config --cflags sdl2 2>/dev/null)
+SIM_OBJS = $(patsubst $(UI_DIR)/%.c,$(SIM_BUILD)/%.o,$(UI_SRCS))
+
+$(SIM_BUILD)/%.o: $(UI_DIR)/%.c $(wildcard $(UI_DIR)/*.h) | $(LVGL_DIR)/lvgl.h
+	@mkdir -p $(dir $@)
+	$(CC) $(SIM_CFLAGS) -c -o $@ $<
+
+sim: $(LVGL_DIR)/lvgl.h
+	$(MAKE) --no-print-directory gamepup-ui-sim.bin
+
+gamepup-ui-sim.bin: $(SIM_OBJS) $(LVGL_OBJS)
+	$(CC) -o gamepup-ui-sim $^ $(LDFLAGS) -lm $(shell pkg-config --libs sdl2)
+
 clean:
+	rm -rf $(SIM_BUILD)
+	rm -f gamepup-ui-sim
 	rm -f gamepup-retro gamepup-oled-status gamepup-gpu-bench gamepup-ui
 	rm -rf $(UI_BUILD)

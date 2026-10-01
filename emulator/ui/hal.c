@@ -140,6 +140,9 @@ static int fb_fd = -1;
 static int input_fd = -1;
 static int buzzer_fd = -1;
 static bool headless;
+#ifdef GAMEPUP_SIM
+static bool sim_win_ready;
+#endif
 static bool opened;
 static int fb_w = SCREEN_W, fb_h = SCREEN_H, fb_stride, fb_bpp = 16;
 static bool fb_rotated;
@@ -386,8 +389,86 @@ lv_indev_t *hal_keypad(void)
 	return keypad;
 }
 
+#ifdef GAMEPUP_SIM
+#include <SDL2/SDL.h>
+static SDL_Window *sim_win;
+static SDL_Renderer *sim_ren;
+static SDL_Texture *sim_tex;
+static bool sim_quit;
+
+static uint32_t sim_map(SDL_Keycode k)
+{
+	switch (k) {
+	case SDLK_UP: return LV_KEY_UP;
+	case SDLK_DOWN: return LV_KEY_DOWN;
+	case SDLK_LEFT: return LV_KEY_LEFT;
+	case SDLK_RIGHT: return LV_KEY_RIGHT;
+	case SDLK_RETURN: case SDLK_z: return LV_KEY_ENTER;           /* A */
+	case SDLK_BACKSPACE: case SDLK_ESCAPE: case SDLK_b: return LV_KEY_ESC; /* B */
+	case SDLK_s: return GP_KEY_START;
+	case SDLK_d: return GP_KEY_SELECT;
+	case SDLK_x: case SDLK_h: return GP_KEY_X;
+	case SDLK_c: return GP_KEY_Y;
+	default: return 0;
+	}
+}
+
+static void sim_pump(void)
+{
+	SDL_Event ev;
+
+	while (SDL_PollEvent(&ev)) {
+		if (ev.type == SDL_QUIT)
+			sim_quit = true;
+		else if ((ev.type == SDL_KEYDOWN || ev.type == SDL_KEYUP) && !ev.key.repeat) {
+			uint32_t key = sim_map(ev.key.keysym.sym);
+
+			if (key)
+				hal_inject_key(key, ev.type == SDL_KEYDOWN);
+		}
+	}
+	SDL_UpdateTexture(sim_tex, NULL, shadow, fb_stride);
+	SDL_RenderClear(sim_ren);
+	SDL_RenderCopy(sim_ren, sim_tex, NULL, NULL);
+	SDL_RenderPresent(sim_ren);
+}
+
+bool hal_sim_start(void)
+{
+	if (SDL_Init(SDL_INIT_VIDEO))
+		return false;
+	sim_win = SDL_CreateWindow("GamePup UI simulator (arrows, Z/Enter=A, Esc/Backspace=B, X=Home, C=Y, S=Start, D=Select)",
+				   SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+				   SCREEN_W * 3, SCREEN_H * 3, 0);
+	if (!sim_win)
+		return false;
+	sim_ren = SDL_CreateRenderer(sim_win, -1, 0);
+	SDL_RenderSetLogicalSize(sim_ren, SCREEN_W, SCREEN_H);
+	sim_tex = SDL_CreateTexture(sim_ren, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING,
+				    SCREEN_W, SCREEN_H);
+	hal_headless_start();
+	sim_win_ready = true;
+	return sim_tex != NULL;
+}
+
+bool hal_sim_quit_requested(void)
+{
+	return sim_quit;
+}
+#else
+bool hal_sim_start(void) { return false; }
+bool hal_sim_quit_requested(void) { return false; }
+#endif
+
 void hal_wait(uint32_t ms)
 {
+#ifdef GAMEPUP_SIM
+	if (sim_win_ready) {
+		sim_pump();
+		usleep(ms * 1000u);
+		return;
+	}
+#endif
 	struct pollfd pfd = { .fd = input_fd, .events = POLLIN };
 
 	if (headless || input_fd < 0) {
