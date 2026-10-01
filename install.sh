@@ -15,6 +15,11 @@ MODULE_SOURCE_DIR=/usr/src/gamepup-ili9341-$KERNEL_VERSION
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
 OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
 OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
+FPGA_OVERLAY_NAME=$OVERLAY_NAME-fpga
+FPGA_OVERLAY_TARGET=/boot/dtb/ti/$FPGA_OVERLAY_NAME.dtbo
+FPGA_FW_NAME="gamepup,fpga-lcd480x272"
+# GAMEPUP_DISPLAY=lcd|fpga selects the display overlay; unset keeps the current choice.
+GAMEPUP_DISPLAY=${GAMEPUP_DISPLAY:-}
 EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
 DEVICE_USER=${DEVICE_USER:-beagle}
 
@@ -61,10 +66,30 @@ make -C "/lib/modules/$KERNEL_VERSION/build" M="$MODULE_SOURCE_DIR" \
 	CC="$KERNEL_CC" modules
 install -m 0644 "$MODULE_SOURCE_DIR/drm_mipi_dbi.ko" "$MODULE_INSTALL_DIR/"
 install -m 0644 "$MODULE_SOURCE_DIR/ili9341.ko" "$MODULE_INSTALL_DIR/"
+
+# Generic MIPI-DBI panel driver, used by the Tang Nano 9K FPGA display.  Built in a
+# separate pass so a failure here never breaks the cape LCD driver.
+if curl -fsSLo "$MODULE_SOURCE_DIR/panel-mipi-dbi.c" \
+	"https://raw.githubusercontent.com/gregkh/linux/$UPSTREAM_VERSION/drivers/gpu/drm/tiny/panel-mipi-dbi.c" &&
+	make -C "/lib/modules/$KERNEL_VERSION/build" M="$MODULE_SOURCE_DIR" \
+		CC="$KERNEL_CC" PANEL_MIPI_DBI=1 modules; then
+	install -m 0644 "$MODULE_SOURCE_DIR/panel-mipi-dbi.ko" "$MODULE_INSTALL_DIR/"
+else
+	echo "Warning: panel-mipi-dbi did not build; the FPGA display will not work" \
+		"until it does (the cape LCD is unaffected)." >&2
+fi
 depmod -a "$KERNEL_VERSION"
 
 dtc -@ -I dts -O dtb -o "$OVERLAY_TARGET" \
 	"$SCRIPT_DIR/$OVERLAY_NAME.dts"
+dtc -@ -I dts -O dtb -o "$FPGA_OVERLAY_TARGET" \
+	"$SCRIPT_DIR/$FPGA_OVERLAY_NAME.dts"
+
+# FPGA display firmware (panel-mipi-dbi init commands) and display selector.
+install -d -m 0755 /lib/firmware /usr/local/sbin
+python3 "$SCRIPT_DIR/fpga/linux/mk-mipi-dbi-fw.py" \
+	"$SCRIPT_DIR/fpga/linux/$FPGA_FW_NAME.txt" "/lib/firmware/$FPGA_FW_NAME.bin"
+install -m 0755 "$SCRIPT_DIR/scripts/gamepup-display" /usr/local/sbin/gamepup-display
 
 if ! getent group spi >/dev/null 2>&1; then
 	groupadd --system spi
@@ -172,9 +197,14 @@ if ! grep -qF "$OVERLAY_TARGET" "$EXTLINUX_CONFIG"; then
 		"$EXTLINUX_CONFIG"
 fi
 
+if [ -n "$GAMEPUP_DISPLAY" ]; then
+	/usr/local/sbin/gamepup-display "$GAMEPUP_DISPLAY"
+fi
+
 modprobe drm_mipi_dbi
 modprobe ili9341
 
 echo "GamePup A4 support installed for kernel $KERNEL_VERSION."
 echo "ILI9341 landscape 320x240 framebuffer will appear after reboot."
+echo "Display selection: 'sudo gamepup-display lcd|fpga|status' (currently: $(/usr/local/sbin/gamepup-display status 2>/dev/null || echo unknown))."
 echo "Reboot to apply the overlay."

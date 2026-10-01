@@ -17,6 +17,10 @@ DEVICE_USER=${DEVICE_USER:-beagle}
 KERNEL_VERSION=$(uname -r)
 OVERLAY_NAME=k3-am6232-pocketbeagle2-gamepup-a4
 OVERLAY_TARGET=/boot/dtb/ti/$OVERLAY_NAME.dtbo
+FPGA_OVERLAY_NAME=$OVERLAY_NAME-fpga
+FPGA_FW_NAME="gamepup,fpga-lcd480x272"
+# GAMEPUP_DISPLAY=lcd|fpga selects the display overlay; unset keeps the current choice.
+GAMEPUP_DISPLAY=${GAMEPUP_DISPLAY:-}
 EXTLINUX_CONFIG=/boot/extlinux/extlinux.conf
 MODULE_INSTALL_DIR=/lib/modules/$KERNEL_VERSION/updates/gamepup
 
@@ -69,6 +73,21 @@ if [ -d "$DIST_DIR/modules" ]; then
 	modprobe ili9341 || true
 fi
 
+# Tang Nano 9K FPGA display: overlay, panel-mipi-dbi init firmware, selector tool.
+if [ -f "$DIST_DIR/dtbo/$FPGA_OVERLAY_NAME.dtbo" ]; then
+	install -d -m 0755 /boot/dtb/ti
+	install -m 0644 "$DIST_DIR/dtbo/$FPGA_OVERLAY_NAME.dtbo" \
+		"/boot/dtb/ti/$FPGA_OVERLAY_NAME.dtbo"
+fi
+if [ -f "$DIST_DIR/firmware/$FPGA_FW_NAME.bin" ]; then
+	install -d -m 0755 /lib/firmware
+	install -m 0644 "$DIST_DIR/firmware/$FPGA_FW_NAME.bin" /lib/firmware/
+fi
+if [ -f "$DIST_DIR/sbin/gamepup-display" ]; then
+	install -d -m 0755 /usr/local/sbin
+	install -m 0755 "$DIST_DIR/sbin/gamepup-display" /usr/local/sbin/gamepup-display
+fi
+
 if [ -f "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" ]; then
 	install -d -m 0755 /boot/dtb/ti
 	install -m 0644 "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" "$OVERLAY_TARGET"
@@ -81,6 +100,10 @@ if [ -f "$DIST_DIR/dtbo/$OVERLAY_NAME.dtbo" ]; then
 	fi
 fi
 
+if [ -n "$GAMEPUP_DISPLAY" ]; then
+	/usr/local/sbin/gamepup-display "$GAMEPUP_DISPLAY"
+fi
+
 if id "$DEVICE_USER" >/dev/null 2>&1; then
 	chown -R "$DEVICE_USER:$DEVICE_USER" /opt/gamepup/gifs /opt/gamepup/saves \
 		/opt/gamepup/games 2>/dev/null || true
@@ -90,4 +113,5 @@ fi
 
 echo "Installed cross-build artifacts from $DIST_DIR."
 echo "Doom Shareware WAD: /opt/gamepup/games/doom/Doom Shareware.wad"
+echo "Display selection: 'sudo gamepup-display lcd|fpga|status'."
 echo "Reboot to apply the device-tree overlay if it was newly added."

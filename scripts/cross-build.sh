@@ -148,6 +148,11 @@ fetch_driver_sources() {
 				"https://raw.githubusercontent.com/gregkh/linux/$tag/drivers/gpu/drm/tiny/ili9341.c" \
 				-o "$module_dir/ili9341.c"; then
 			log "Fetched DRM sources from gregkh/linux $tag"
+			# Optional: generic panel driver for the Tang Nano 9K FPGA display.
+			curl -fsSL \
+				"https://raw.githubusercontent.com/gregkh/linux/$tag/drivers/gpu/drm/tiny/panel-mipi-dbi.c" \
+				-o "$module_dir/panel-mipi-dbi.c" ||
+				rm -f "$module_dir/panel-mipi-dbi.c"
 			return
 		fi
 	done
@@ -160,6 +165,15 @@ build_overlay() {
 	dtc -@ -I dts -O dtb \
 		-o "$DIST_DIR/dtbo/k3-am6232-pocketbeagle2-gamepup-a4.dtbo" \
 		"$ROOT_DIR/k3-am6232-pocketbeagle2-gamepup-a4.dts"
+	dtc -@ -I dts -O dtb \
+		-o "$DIST_DIR/dtbo/k3-am6232-pocketbeagle2-gamepup-a4-fpga.dtbo" \
+		"$ROOT_DIR/k3-am6232-pocketbeagle2-gamepup-a4-fpga.dts"
+	# Tang Nano 9K display: panel-mipi-dbi init firmware + display selector.
+	mkdir -p "$DIST_DIR/firmware" "$DIST_DIR/sbin"
+	python3 "$ROOT_DIR/fpga/linux/mk-mipi-dbi-fw.py" \
+		"$ROOT_DIR/fpga/linux/gamepup,fpga-lcd480x272.txt" \
+		"$DIST_DIR/firmware/gamepup,fpga-lcd480x272.bin"
+	install -m 0755 "$ROOT_DIR/scripts/gamepup-display" "$DIST_DIR/sbin/"
 }
 
 build_userspace() {
@@ -272,6 +286,18 @@ build_modules() {
 		modules
 	install -m 0644 "$module_dir/drm_mipi_dbi.ko" "$module_dir/ili9341.ko" \
 		"$DIST_DIR/modules/"
+	if [ -f "$module_dir/panel-mipi-dbi.c" ]; then
+		if make -C "$KDIR" M="$module_dir" \
+			ARCH="$TARGET_ARCH" \
+			CROSS_COMPILE="${CROSS_TRIPLE}-" \
+			CC="$CROSS_GCC" \
+			PANEL_MIPI_DBI=1 \
+			modules; then
+			install -m 0644 "$module_dir/panel-mipi-dbi.ko" "$DIST_DIR/modules/"
+		else
+			log "WARNING: panel-mipi-dbi failed to build; FPGA display driver omitted"
+		fi
+	fi
 	printf '%s\n' "$HEADERS_VERSION" >"$DIST_DIR/modules/KERNEL_VERSION.txt"
 }
 
@@ -314,6 +340,7 @@ main() {
 	require_cmd git
 	require_cmd make
 	require_cmd dtc
+	require_cmd python3
 	require_cmd dpkg-deb
 	require_cmd file
 	require_cmd sha256sum

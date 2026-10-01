@@ -1,0 +1,10 @@
+# Init commands for the Tang Nano 9K 480x272 display (panel-mipi-dbi firmware).
+# Build with:  fpga/linux/mk-mipi-dbi-fw.py gamepup,fpga-lcd480x272.txt gamepup,fpga-lcd480x272.bin
+# The driver pulses the reset GPIO first, then runs these on every pipeline enable.
+command 0x01            # SWRESET
+delay 5
+command 0x11            # SLPOUT
+delay 5
+command 0x3a 0x55       # COLMOD: 16 bit/pixel (RGB565)
+command 0x36 0x00       # MADCTL: no rotation / mirroring
+command 0x29            # DISPON

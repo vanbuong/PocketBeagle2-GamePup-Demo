@@ -74,9 +74,15 @@ reset pins, so they are mutually exclusive:
   `spi-max-frequency` 40-48 MHz, `width-mm`/`height-mm`, no `rotation`, no
   backlight dependency. The firmware blob is installed to `/lib/firmware`.
 
-`install.sh` / `install-dist.sh` / `cross-build.sh` get a `DISPLAY=lcd|fpga`
-option that adds or removes the extra `fdtoverlays` line in extlinux.
-Switching = change the option and reboot.
+**Implemented:** the FPGA overlay node is `fpga-display@0` (the cape's `display@0`
+is set `status = "disabled"`, so no property deletion is needed). `gamepup-display
+lcd|fpga|status` (`scripts/gamepup-display`) edits the single `fdtoverlays` line;
+`install.sh` / `install-dist.sh` accept `GAMEPUP_DISPLAY=lcd|fpga`;
+`cross-build.sh` ships the overlay, `/lib/firmware/gamepup,fpga-lcd480x272.bin`
+(from `fpga/linux/`) and the selector. `panel-mipi-dbi` is built out of tree in a
+separate, non-fatal pass. `scripts/test-overlays.sh` (run in CI) merges both
+overlays onto a stub tree and checks which display node is enabled.
+Switching = run `gamepup-display` and reboot.
 
 ## Milestones
 

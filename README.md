@@ -56,6 +56,36 @@ Only project UI and original benchmark/art assets are shown here; no ROM or
 commercial game imagery is included. Capture provenance is documented in
 [`docs/screenshots/README.md`](docs/screenshots/README.md).
 
+## Choosing the display: cape LCD or Tang Nano 9K FPGA
+
+Two display overlays exist; only one can be active because the cape LCD and the
+FPGA share SPI2, D/C (P2.17) and reset (P2.19):
+
+| choice | overlay(s) | driver | framebuffer |
+|---|---|---|---|
+| `lcd` (default) | `...-gamepup-a4.dtbo` | `ili9341` | 320x240 |
+| `fpga` | `...-gamepup-a4.dtbo` + `...-gamepup-a4-fpga.dtbo` | `panel-mipi-dbi` + `/lib/firmware/gamepup,fpga-lcd480x272.bin` | 480x272 |
+
+```sh
+sudo gamepup-display status
+sudo gamepup-display fpga     # then reboot
+sudo gamepup-display lcd      # back to the cape LCD
+# or at install time:
+sudo GAMEPUP_DISPLAY=fpga ./install.sh
+```
+
+`gamepup-display` adds/removes the FPGA overlay on the single `fdtoverlays` line
+of `/boot/extlinux/extlinux.conf` (backup: `extlinux.conf.before-gamepup-display`).
+FPGA wiring and gateware: [`fpga/tang-nano-9k/`](fpga/tang-nano-9k/README.md);
+plan: [`docs/FPGA_TANG_NANO_9K_PLAN.md`](docs/FPGA_TANG_NANO_9K_PLAN.md).
+
+> **Status:** the FPGA overlay, firmware blob and selector are checked only by
+> `scripts/test-overlays.sh` (overlay merge) and by comparing the firmware with
+> the kernel's `mipi-dbi-cmd`. They have not been run on a PocketBeagle 2 yet.
+> The GamePup userspace (menu, emulators) still assumes a 320x240 framebuffer;
+> on the FPGA display they will not fill the 480x272 screen until the userspace
+> 480x272 port is done. The Linux console and `fbi`/`fbset` work.
+
 ## Displays and render resolutions
 
 The main ILI9341 LCD is a landscape **320x240** framebuffer using 32-bit XRGB

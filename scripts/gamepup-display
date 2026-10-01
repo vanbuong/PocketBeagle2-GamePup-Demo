@@ -1,0 +1,83 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Choose which display the PocketBeagle 2 drives: the cape ILI9341 LCD or the
+# Tang Nano 9K FPGA display (480x272).  Edits the fdtoverlays line in extlinux.
+#
+#   sudo gamepup-display status
+#   sudo gamepup-display lcd      # cape ILI9341, 320x240
+#   sudo gamepup-display fpga     # Tang Nano 9K, 480x272
+#
+# Reboot afterwards.  The two displays share SPI2, D/C and reset: wire only one.
+set -eu
+
+MAIN=${GAMEPUP_OVERLAY_MAIN:-/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4.dtbo}
+FPGA=${GAMEPUP_OVERLAY_FPGA:-/dtb/ti/k3-am6232-pocketbeagle2-gamepup-a4-fpga.dtbo}
+EXTLINUX_CONFIG=${EXTLINUX_CONFIG:-/boot/extlinux/extlinux.conf}
+BOOT_DTB_DIR=${GAMEPUP_BOOT_DTB_DIR:-/boot/dtb/ti}
+
+usage() {
+	echo "Usage: $0 status|lcd|fpga" >&2
+	exit 2
+}
+
+current() {
+	if ! grep -qF "$MAIN" "$EXTLINUX_CONFIG"; then
+		echo "none (GamePup overlay not in $EXTLINUX_CONFIG)"
+	elif grep -qF "$FPGA" "$EXTLINUX_CONFIG"; then
+		echo fpga
+	else
+		echo lcd
+	fi
+}
+
+[ $# -eq 1 ] || usage
+[ -f "$EXTLINUX_CONFIG" ] || { echo "Missing $EXTLINUX_CONFIG" >&2; exit 1; }
+
+case "$1" in
+status)
+	echo "display: $(current)"
+	exit 0
+	;;
+lcd | fpga) ;;
+*) usage ;;
+esac
+
+if [ "$(id -u)" -ne 0 ] && [ -z "${GAMEPUP_ALLOW_NONROOT:-}" ]; then
+	echo "Run as root." >&2
+	exit 1
+fi
+
+grep -qF "$MAIN" "$EXTLINUX_CONFIG" || {
+	echo "The GamePup overlay is not enabled; run install.sh first." >&2
+	exit 1
+}
+
+if [ ! -e "$EXTLINUX_CONFIG.before-gamepup-display" ]; then
+	cp -a "$EXTLINUX_CONFIG" "$EXTLINUX_CONFIG.before-gamepup-display"
+fi
+
+# Always drop any existing FPGA entry first, then add it back for "fpga".
+# U-Boot reads one fdtoverlays line, so the FPGA path goes on the same line,
+# after the main overlay (it disables a node that overlay creates).
+esc() { printf '%s' "$1" | sed 's/[.[\*^$/]/\\&/g'; }
+sed -i "s# $(esc "$FPGA")##g" "$EXTLINUX_CONFIG"
+
+if [ "$1" = fpga ]; then
+	if [ ! -e "$BOOT_DTB_DIR/$(basename "$FPGA")" ]; then
+		echo "Missing $BOOT_DTB_DIR/$(basename "$FPGA"); run install.sh or install-dist.sh." >&2
+		exit 1
+	fi
+	if [ ! -e /lib/firmware/gamepup,fpga-lcd480x272.bin ]; then
+		echo "Warning: /lib/firmware/gamepup,fpga-lcd480x272.bin is missing; the" \
+			"panel-mipi-dbi driver will fail to probe." >&2
+	fi
+	sed -i "/^[[:space:]]*fdtoverlays.*$(esc "$MAIN")/ s#\$# $FPGA#" "$EXTLINUX_CONFIG"
+	grep -qF "$FPGA" "$EXTLINUX_CONFIG" || {
+		echo "Could not add the FPGA overlay: no single 'fdtoverlays' line contains the" \
+			"GamePup overlay. Edit $EXTLINUX_CONFIG by hand." >&2
+		exit 1
+	}
+fi
+
+echo "display: $(current)"
+echo "Reboot to apply."
