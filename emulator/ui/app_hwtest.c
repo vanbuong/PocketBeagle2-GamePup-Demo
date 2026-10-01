@@ -2,7 +2,10 @@
 // Hardware test: every cape button, LEDs, buzzer tone, backlight and colour patterns.
 #include "ui.h"
 
+#include "compat.h"
+#ifndef _WIN32
 #include <linux/input-event-codes.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

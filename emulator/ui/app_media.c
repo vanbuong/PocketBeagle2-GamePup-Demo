@@ -2,6 +2,7 @@
 // Music player (mpv over a UNIX socket) and voice memos (arecord/aplay).
 #define _GNU_SOURCE
 #include "ui.h"
+#include "compat.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -12,16 +13,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
 #define MUSIC_ROOT "/opt/gamepup/music"
 #define MEMO_DIR "/opt/gamepup/voice-memos"
 #define VOLUME_FILE "/opt/gamepup/saves/music-volume"
+#ifdef _WIN32
+#define MPV_UID 0
+#else
+#define MPV_UID ((int)getuid())
+#endif
 #define SEEK_STEP 5
 #define VOLUME_STEP 5
 #define MEMO_RATE 48000
@@ -87,6 +95,7 @@ static const char *mp_candidate(int n, char *buf, size_t size)
 	}
 }
 
+#ifndef _WIN32
 static void mp_send(const char *json)
 {
 	if (mp.sock >= 0 && send(mp.sock, json, strlen(json), MSG_NOSIGNAL | MSG_DONTWAIT) < 0 &&
@@ -95,6 +104,12 @@ static void mp_send(const char *json)
 		mp.sock = -1;
 	}
 }
+#else
+static void mp_send(const char *json)
+{
+	(void)json;
+}
+#endif
 
 static void mp_cmd(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void mp_cmd(const char *fmt, ...)
@@ -152,7 +167,7 @@ static void mp_set_volume(int level)
 		mp.volume_pending = true;
 }
 
-static void mp_parse_line(char *line)
+static void __attribute__((unused)) mp_parse_line(char *line)
 {
 	char *name, *data, *end;
 	char key[32];
@@ -193,6 +208,7 @@ static void mp_parse_line(char *line)
 	}
 }
 
+#ifndef _WIN32
 static void mp_pump(void)
 {
 	ssize_t n;
@@ -217,6 +233,11 @@ static void mp_pump(void)
 		mp.sock = -1;
 	}
 }
+#else
+static void mp_pump(void)
+{
+}
+#endif
 
 static void mp_free_tracks(void)
 {
@@ -263,7 +284,7 @@ static void mp_try_start(void)
 		return;
 	}
 	snprintf(audio, sizeof(audio), "--audio-device=%s", cand);
-	snprintf(mp.socket_path, sizeof(mp.socket_path), "/tmp/gamepup-mpv-%d.sock", (int)getuid());
+	snprintf(mp.socket_path, sizeof(mp.socket_path), "/tmp/gamepup-mpv-%d.sock", MPV_UID);
 	unlink(mp.socket_path);
 	snprintf(ipc, sizeof(ipc), "--input-ipc-server=%s", mp.socket_path);
 	argv[12] = ipc;
@@ -278,6 +299,7 @@ static void mp_try_start(void)
 	mp.started_at = hal_now_ms();
 }
 
+#ifndef _WIN32
 static void mp_connect(void)
 {
 	struct sockaddr_un addr = { .sun_family = AF_UNIX };
@@ -297,6 +319,11 @@ static void mp_connect(void)
 	for (int i = 0; i < 5; i++)
 		mp_cmd("\"observe_property\",%d,\"%s\"", i + 1, OBSERVE[i]);
 }
+#else
+static void mp_connect(void)
+{
+}
+#endif
 
 static void mp_load_playlist(void)
 {

@@ -2,6 +2,7 @@
 // ROM library, platform game lists, DOOM launcher and GPU benchmarks.
 #define _GNU_SOURCE
 #include "ui.h"
+#include "compat.h"
 
 #include <ctype.h>
 #include <dirent.h>

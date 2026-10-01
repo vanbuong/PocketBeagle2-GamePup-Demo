@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // USB ROM import: instructions, one-tap import, and a result summary.
 #include "ui.h"
+#include "compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -2,6 +2,7 @@
 // gamepup-ui: LVGL phone-style launcher for the PocketBeagle 2 + GamePup A4.
 #define _GNU_SOURCE
 #include "ui.h"
+#include "compat.h"
 
 #include <signal.h>
 #include <stdio.h>

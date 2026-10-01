@@ -2,6 +2,7 @@
 // Settings and Second Screen pages (iOS-style grouped switches and sliders).
 #define _GNU_SOURCE
 #include "ui.h"
+#include "compat.h"
 
 #include <dirent.h>
 #include <stdio.h>

@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: LVGL simulator (Linux + Windows)
+
+on:
+  push:
+    branches: [main, 'cursor/**']
+    paths:
+      - 'emulator/ui/**'
+      - 'emulator/Makefile'
+      - '.github/workflows/simulator.yml'
+  pull_request:
+    paths:
+      - 'emulator/ui/**'
+      - 'emulator/Makefile'
+      - '.github/workflows/simulator.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: simulator-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Simulator (Linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL2
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential git pkg-config libsdl2-dev
+
+      - name: Build simulator and device UI (native smoke build)
+        run: |
+          make -C emulator -j"$(nproc)" sim
+          make -C emulator -j"$(nproc)" gamepup-ui
+
+      - name: Render sample screens headlessly
+        run: |
+          set -eux
+          root=$PWD/sample
+          mkdir -p "$root/opt/gamepup/games/nes" "$root/opt/gamepup/saves" \
+            "$root/opt/gamepup/music" "$root/opt/gamepup/voice-memos" "$root/opt/gamepup/gifs"
+          head -c 40960 /dev/zero > "$root/opt/gamepup/games/nes/Demo Game.nes"
+          mkdir -p shots
+          for step in "home:wait:10" "settings:right*7;enter" "about:right*11;enter" "hardware-test:right*9;enter"; do
+            name=${step%%:*}; script=${step#*:}
+            GAMEPUP_ROOT=$root SDL_VIDEODRIVER=dummy ./emulator/gamepup-ui-sim \
+              --headless shots --script "$script;shot:$name"
+          done
+          ls -l shots
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp emulator/gamepup-ui-sim dist/
+          cat > dist/README.txt <<'TXT'
+          GamePup LVGL UI simulator (Linux). Needs libsdl2 (apt install libsdl2-2.0-0).
+          Run: GAMEPUP_ROOT=/tmp/sample ./gamepup-ui-sim --sim
+          Keys: arrows, Enter/Z=A, Esc/Backspace=B, X=Home, C=Y, S=Start, D=Select
+          TXT
+          tar -C dist -czf gamepup-ui-sim-linux-x86_64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gamepup-ui-sim-linux-x86_64
+          path: |
+            gamepup-ui-sim-linux-x86_64.tar.gz
+            shots/*.ppm
+
+  windows:
+    name: Simulator (Windows x86_64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            make
+            git
+            findutils
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-SDL2
+
+      - name: Build simulator
+        run: make -C emulator -j"$(nproc)" sim
+
+      - name: Render sample screens headlessly
+        run: |
+          set -eux
+          root=$PWD/sample
+          mkdir -p "$root/opt/gamepup/games/nes" "$root/opt/gamepup/saves" \
+            "$root/opt/gamepup/music" "$root/opt/gamepup/voice-memos" "$root/opt/gamepup/gifs"
+          head -c 40960 /dev/zero > "$root/opt/gamepup/games/nes/Demo Game.nes"
+          mkdir -p shots
+          GAMEPUP_ROOT=$root ./emulator/gamepup-ui-sim.exe --headless shots \
+            --script "shot:home;right*7;enter;shot:settings"
+          ls -l shots
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp emulator/gamepup-ui-sim.exe dist/
+          cp /mingw64/bin/SDL2.dll dist/
+          cat > dist/README.txt <<'TXT'
+          GamePup LVGL UI simulator (Windows).
+          Run from a terminal: set GAMEPUP_ROOT=C:\sample && gamepup-ui-sim.exe --sim
+          Keys: arrows, Enter/Z=A, Esc/Backspace=B, X=Home, C=Y, S=Start, D=Select
+          Games, mpv and audio are not launched in the simulator.
+          TXT
+          (cd dist && 7z a -tzip ../gamepup-ui-sim-windows-x86_64.zip . >/dev/null 2>&1 || zip -r ../gamepup-ui-sim-windows-x86_64.zip .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gamepup-ui-sim-windows-x86_64
+          path: |
+            gamepup-ui-sim-windows-x86_64.zip
+            shots/*.ppm

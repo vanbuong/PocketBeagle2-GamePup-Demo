@@ -2,21 +2,27 @@
 #define _GNU_SOURCE
 #include "hal.h"
 
+#include "compat.h"
+
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/fb.h>
-#include <linux/input.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <linux/fb.h>
+#include <linux/input.h>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
+#else
+#include <windows.h>
+#endif
 
 #define FRAMEBUFFER "/dev/fb0"
 #define INPUT_PRIMARY "/dev/input/by-path/platform-gamepup-buttons-event"
@@ -54,10 +60,14 @@ const char *hal_p(const char *absolute)
 
 uint32_t hal_now_ms(void)
 {
+#ifdef _WIN32
+	return (uint32_t)GetTickCount64();
+#else
 	struct timespec ts;
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
+#endif
 }
 
 /* ---------------------------------------------------------------- files */
@@ -129,7 +139,11 @@ int64_t hal_file_mtime_ns(const char *path)
 
 	if (stat(path, &st))
 		return 0;
+	#ifdef _WIN32
+	return (int64_t)st.st_mtime * 1000000000LL;
+#else
 	return (int64_t)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec;
+#endif
 }
 
 /* ---------------------------------------------------------------- display */
@@ -151,6 +165,7 @@ static size_t shadow_size;
 static uint8_t render_a[SCREEN_W * 40 * 4] __attribute__((aligned(4)));
 static uint8_t render_b[SCREEN_W * 40 * 4] __attribute__((aligned(4)));
 
+#ifndef _WIN32
 static void write_span(size_t offset, const void *data, size_t len)
 {
 	const uint8_t *p = data;
@@ -168,6 +183,14 @@ static void write_span(size_t offset, const void *data, size_t len)
 		len -= (size_t)n;
 	}
 }
+#else
+static void write_span(size_t offset, const void *data, size_t len)
+{
+	(void)offset;
+	(void)data;
+	(void)len;
+}
+#endif
 
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
@@ -211,6 +234,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 	lv_display_flush_ready(disp);
 }
 
+#ifndef _WIN32
 static bool fb_prepare(void)
 {
 	struct fb_var_screeninfo var;
@@ -254,6 +278,12 @@ static bool fb_prepare(void)
 	}
 	return shadow != NULL;
 }
+#else
+static bool fb_prepare(void)
+{
+	return false;
+}
+#endif
 
 /* ---------------------------------------------------------------- input */
 
@@ -279,7 +309,7 @@ static void queue_key(uint32_t key, bool pressed)
 	q_tail = next;
 }
 
-static uint32_t map_code(int code)
+static uint32_t __attribute__((unused)) map_code(int code)
 {
 	switch (code) {
 	case KEY_UP: return LV_KEY_UP;
@@ -296,6 +326,7 @@ static uint32_t map_code(int code)
 	}
 }
 
+#ifndef _WIN32
 static void input_pump(void)
 {
 	struct input_event ev[32];
@@ -322,6 +353,11 @@ static void input_pump(void)
 		}
 	}
 }
+#else
+static void input_pump(void)
+{
+}
+#endif
 
 static void keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -337,6 +373,7 @@ static void keypad_read(lv_indev_t *indev, lv_indev_data_t *data)
 	data->continue_reading = q_head != q_tail;
 }
 
+#ifndef _WIN32
 static int open_buttons(void)
 {
 	const char *paths[] = { INPUT_PRIMARY, INPUT_FALLBACK };
@@ -352,6 +389,12 @@ static int open_buttons(void)
 	}
 	return -1;
 }
+#else
+static int open_buttons(void)
+{
+	return -1;
+}
+#endif
 
 void hal_inject_key(uint32_t key, bool pressed)
 {
@@ -390,7 +433,7 @@ lv_indev_t *hal_keypad(void)
 }
 
 #ifdef GAMEPUP_SIM
-#include <SDL2/SDL.h>
+#include <SDL.h>
 static SDL_Window *sim_win;
 static SDL_Renderer *sim_ren;
 static SDL_Texture *sim_tex;
@@ -469,17 +512,20 @@ void hal_wait(uint32_t ms)
 		return;
 	}
 #endif
+#ifndef _WIN32
 	struct pollfd pfd = { .fd = input_fd, .events = POLLIN };
 
-	if (headless || input_fd < 0) {
-		usleep(ms * 1000u);
+	if (!headless && input_fd >= 0) {
+		poll(&pfd, 1, (int)ms);
 		return;
 	}
-	poll(&pfd, 1, (int)ms);
+#endif
+	usleep(ms * 1000u);
 }
 
 /* ---------------------------------------------------------------- buzzer */
 
+#ifndef _WIN32
 static const char *buzzer_path(void)
 {
 	static char found[256];
@@ -504,12 +550,19 @@ static const char *buzzer_path(void)
 	}
 	return NULL;
 }
+#else
+static const char *buzzer_path(void)
+{
+	return NULL;
+}
+#endif
 
 bool hal_buzzer_ready(void)
 {
 	return buzzer_path() != NULL;
 }
 
+#ifndef _WIN32
 void hal_tone(int hz)
 {
 	struct input_event ev;
@@ -532,6 +585,12 @@ void hal_tone(int hz)
 		buzzer_fd = -1;
 	}
 }
+#else
+void hal_tone(int hz)
+{
+	(void)hz;
+}
+#endif
 
 void hal_buzzer_silence(void)
 {
@@ -622,6 +681,7 @@ bool hal_backlight_set(int level)
 
 /* ---------------------------------------------------------------- children */
 
+#ifndef _WIN32
 int hal_spawn(const char *const *argv, int *out_fd, bool silence_stderr)
 {
 	int pipefd[2] = { -1, -1 };
@@ -659,7 +719,17 @@ int hal_spawn(const char *const *argv, int *out_fd, bool silence_stderr)
 	}
 	return pid;
 }
+#else
+int hal_spawn(const char *const *argv, int *out_fd, bool silence_stderr)
+{
+	(void)argv;
+	(void)out_fd;
+	(void)silence_stderr;
+	return -1;
+}
+#endif
 
+#ifndef _WIN32
 void hal_spawn_detached(const char *const *argv)
 {
 	pid_t pid = fork();
@@ -683,7 +753,14 @@ void hal_spawn_detached(const char *const *argv)
 	}
 	waitpid(pid, NULL, 0);
 }
+#else
+void hal_spawn_detached(const char *const *argv)
+{
+	(void)argv;
+}
+#endif
 
+#ifndef _WIN32
 bool hal_child_done(int pid, int *status)
 {
 	int st = 0;
@@ -695,13 +772,30 @@ bool hal_child_done(int pid, int *status)
 		*status = st;
 	return true;
 }
+#else
+bool hal_child_done(int pid, int *status)
+{
+	(void)pid;
+	(void)status;
+	return true;
+}
+#endif
 
+#ifndef _WIN32
 void hal_kill(int pid, int sig)
 {
 	if (pid > 0)
 		kill(pid, sig);
 }
+#else
+void hal_kill(int pid, int sig)
+{
+	(void)pid;
+	(void)sig;
+}
+#endif
 
+#ifndef _WIN32
 bool hal_run_root_helper(const char *const *argv)
 {
 	const char *sudo_argv[16] = { "sudo", "-n" };
@@ -723,6 +817,13 @@ bool hal_run_root_helper(const char *const *argv)
 	}
 	return false;
 }
+#else
+bool hal_run_root_helper(const char *const *argv)
+{
+	(void)argv;
+	return false;
+}
+#endif
 
 void hal_claim_display(void)
 {
@@ -735,7 +836,8 @@ void hal_claim_display(void)
 	hal_run_root_helper(detach);
 }
 
-static bool key_held(int fd, int code)
+#ifndef _WIN32
+static bool __attribute__((unused)) key_held(int fd, int code)
 {
 	uint8_t bits[96] = { 0 };
 
@@ -743,7 +845,16 @@ static bool key_held(int fd, int code)
 		return false;
 	return bits[code / 8] & (1 << (code % 8));
 }
+#else
+static bool __attribute__((unused)) key_held(int fd, int code)
+{
+	(void)fd;
+	(void)code;
+	return false;
+}
+#endif
 
+#ifndef _WIN32
 int hal_run(const char *const *argv)
 {
 	int status = -1;
@@ -770,6 +881,13 @@ int hal_run(const char *const *argv)
 	}
 	return pid > 0 && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
+#else
+int hal_run(const char *const *argv)
+{
+	(void)argv;
+	return -1;
+}
+#endif
 
 /* ---------------------------------------------------------------- open/close */
 
@@ -869,6 +987,7 @@ int hal_cpu_temp_c(void)
 	return raw < 0 ? -1 : raw / 1000;
 }
 
+#ifndef _WIN32
 bool hal_which(const char *program)
 {
 	const char *path = getenv("PATH");
@@ -887,7 +1006,15 @@ bool hal_which(const char *program)
 	free(copy);
 	return found;
 }
+#else
+bool hal_which(const char *program)
+{
+	(void)program;
+	return false;
+}
+#endif
 
+#ifndef _WIN32
 char *hal_alsa_card_id(char *buf, size_t size)
 {
 	const char *env = getenv("GAMEPUP_ALSA_CARD");
@@ -922,3 +1049,11 @@ char *hal_alsa_card_id(char *buf, size_t size)
 	waitpid(pid, NULL, 0);
 	return buf;
 }
+#else
+char *hal_alsa_card_id(char *buf, size_t size)
+{
+	(void)size;
+	buf[0] = '\0';
+	return buf;
+}
+#endif

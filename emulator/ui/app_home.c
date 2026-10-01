@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Phone-style home screen: widget, paged app grid, About.
 #include "ui.h"
+#include "compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>

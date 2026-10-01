@@ -58,7 +58,9 @@ gamepup-ui.bin: $(UI_OBJS) $(LVGL_OBJS)
 
 # Desktop simulator: same UI code in an SDL2 window (needs libsdl2-dev).
 SIM_BUILD := $(UI_DIR)/build-sim
-SIM_CFLAGS := $(UI_CFLAGS) -DGAMEPUP_SIM $(shell pkg-config --cflags sdl2 2>/dev/null)
+SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
+SDL_LIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null || echo -lSDL2)
+SIM_CFLAGS := $(UI_CFLAGS) -DGAMEPUP_SIM $(SDL_CFLAGS)
 SIM_OBJS = $(patsubst $(UI_DIR)/%.c,$(SIM_BUILD)/%.o,$(UI_SRCS))
 
 $(SIM_BUILD)/%.o: $(UI_DIR)/%.c $(wildcard $(UI_DIR)/*.h) | $(LVGL_DIR)/lvgl.h
@@ -69,7 +71,7 @@ sim: $(LVGL_DIR)/lvgl.h
 	$(MAKE) --no-print-directory gamepup-ui-sim.bin
 
 gamepup-ui-sim.bin: $(SIM_OBJS) $(LVGL_OBJS)
-	$(CC) -o gamepup-ui-sim $^ $(LDFLAGS) -lm $(shell pkg-config --libs sdl2)
+	$(CC) -o gamepup-ui-sim $^ $(LDFLAGS) -lm $(SDL_LIBS)
 
 clean:
 	rm -rf $(SIM_BUILD)
