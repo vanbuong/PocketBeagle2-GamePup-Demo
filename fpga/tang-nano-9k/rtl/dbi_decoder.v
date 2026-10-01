@@ -27,10 +27,12 @@ module dbi_decoder #(
 	output reg  [7:0]  colmod
 );
 	// 2-FF synchroniser on the byte toggle; byte_data is stable by then.
-	reg t1, t2, t3;
-	always @(posedge clk or negedge rst_n) begin
-		if (!rst_n) begin t1 <= byte_toggle; t2 <= byte_toggle; t3 <= byte_toggle; end
-		else        begin t1 <= byte_toggle; t2 <= t1;          t3 <= t2; end
+	// No reset on purpose: a reset value taken from byte_toggle is a non-constant async
+	// load that Gowin flops cannot implement.  The chain just keeps running; bytes that
+	// arrive while rst_n is low are ignored by the decoder state below.
+	reg t1 = 1'b0, t2 = 1'b0, t3 = 1'b0;
+	always @(posedge clk) begin
+		t1 <= byte_toggle; t2 <= t1; t3 <= t2;
 	end
 	wire new_byte = t2 ^ t3;
 

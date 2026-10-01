@@ -28,14 +28,30 @@ module framestore_bsram #(
 	localparam N  = W * H;
 	localparam PB = R_BITS + G_BITS + B_BITS;
 
-	reg [PB-1:0] mem [0:N-1];
-	integer i;
-	initial for (i = 0; i < N; i = i + 1) mem[i] = {PB{1'b0}};
-
 	wire [PB-1:0] packed_px = {wr_data[15 -: R_BITS], wr_data[10 -: G_BITS], wr_data[4 -: B_BITS]};
 
-	always @(posedge clk_w)
-		if (wr_en && wr_addr < N) mem[wr_addr] <= packed_px;
+	// One 1-bit memory per stored bit, power-of-two depth (2**17 >= W*H), no address range
+	// guards: this is the shape Gowin tools map to BSRAM (8 blocks of 16384 x 1 per bit).
+	// A single wide array with `addr < N` guards was mapped to ~94,000 LUT/mux cells
+	// (yosys synth_gowin) and does not fit the chip.
+	// The decoder never writes outside the frame, and reads outside it are blanked.
+	wire [PB-1:0] q;
+	genvar gb;
+	generate for (gb = 0; gb < PB; gb = gb + 1) begin : g_bit
+		reg mem [0:131071];
+`ifdef SIM
+		integer i;
+		initial for (i = 0; i < 131072; i = i + 1) mem[i] = 1'b0;   // avoid X in simulation
+`endif
+		reg qb;
+		always @(posedge clk_w) if (wr_en) mem[wr_addr] <= packed_px[gb];
+		always @(posedge clk_r) qb <= mem[rd_addr];
+		assign q[gb] = qb;
+	end endgenerate
+
+	// y*480 = (y<<9) - (y<<5)  (W fixed at 480 here)
+	wire [18:0] ya = {rd_y, 9'b0} - {rd_y, 5'b0};
+	wire [16:0] rd_addr = ya[16:0] + {7'b0, rd_x};
 
 	// bit-replicate a v-bit value up to n bits
 	function [5:0] expand(input [5:0] v, input integer vb, input integer nb);
@@ -48,13 +64,6 @@ module framestore_bsram #(
 			expand = r;
 		end
 	endfunction
-
-	// y*480 = (y<<9) - (y<<5)  (W fixed at 480 here)
-	wire [18:0] ya = {rd_y, 9'b0} - {rd_y, 5'b0};
-	wire [16:0] rd_addr = ya[16:0] + {7'b0, rd_x};
-
-	reg [PB-1:0] q;
-	always @(posedge clk_r) q <= (rd_addr < N) ? mem[rd_addr] : {PB{1'b0}};
 
 	wire [5:0] r5 = expand(q[PB-1 -: R_BITS],             R_BITS, 5);
 	wire [5:0] g6 = expand(q[PB-1-R_BITS -: G_BITS],      G_BITS, 6);
