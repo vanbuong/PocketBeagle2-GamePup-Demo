@@ -117,6 +117,7 @@ at its original pixel resolution.
   </tr>
   <tr>
     <td align="center"><a href="docs/screenshots/music.png"><img src="docs/screenshots/music.png" width="240" alt="Music browser"></a><br><strong>Music</strong></td>
+    <td align="center"><a href="docs/screenshots/now-playing.png"><img src="docs/screenshots/now-playing.png" width="240" alt="Now playing"></a><br><strong>Now playing</strong></td>
     <td align="center"><a href="docs/screenshots/voice-memo.png"><img src="docs/screenshots/voice-memo.png" width="240" alt="Voice memo list"></a><br><strong>Voice memo</strong></td>
     <td align="center"><a href="docs/screenshots/import.png"><img src="docs/screenshots/import.png" width="240" alt="USB ROM import"></a><br><strong>USB ROM import</strong></td>
   </tr>
@@ -585,11 +586,17 @@ through the MAX98357 (mpv → ALSA). Subfolders are supported. Copy
 |---|---|---|
 | Up / Down | Move selection | Volume + / − (steps of 5) |
 | A | Open folder or play file | Pause / resume |
-| Y | Pause / resume | Pause / resume |
+| Y | Pause / resume | Toggle loop |
 | B | Parent folder / exit | Back to library (keeps playing) |
 | Left / Right | — | Seek −5s / +5s |
 | Start / Select | — | Next / previous track |
 | X | Home screen | Stop playback |
+
+The Now playing screen follows the layout of the LVGL music demo: a light
+player card with a radial spectrum around the album disc, gradient progress
+slider, volume bar, and loop / previous / play / next / stop controls. (The
+spectrum is animated from playback state, not real audio data.) Set
+`GAMEPUP_FAKE_PLAYER=1` in the simulator to preview it without `mpv`.
 
 Music keeps playing in the background while you browse; the library shows a
 **Now playing** row to jump back.

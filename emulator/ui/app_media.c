@@ -66,7 +66,7 @@ static struct {
 	char **tracks;
 	int ntracks, index;
 	bool want_play;
-	bool playing, paused;
+	bool playing, paused, loop;
 	double pos, dur;
 	int volume;
 	bool volume_pending;
@@ -366,6 +366,11 @@ static void mp_tick(lv_timer_t *timer)
 	} else if (mp.state == MP_READY) {
 		int st;
 
+		if (mp.sock < 0 && mp.pid == 0 && getenv("GAMEPUP_FAKE_PLAYER") && mp.playing && !mp.paused) {
+			mp.pos += 0.1;
+			if (mp.pos > mp.dur)
+				mp.pos = 0;
+		}
 		if (mp.pid > 0 && hal_child_done(mp.pid, &st)) {
 			mp.pid = 0;
 			mp.state = MP_OFF;
@@ -400,7 +405,13 @@ static void mp_play(char **paths, int count, int index)
 	mp.want_play = true;
 	if (!mp.timer)
 		mp.timer = lv_timer_create(mp_tick, 100, NULL);
-	if (mp.state == MP_READY) {
+	if (getenv("GAMEPUP_FAKE_PLAYER")) {
+		/* Simulator/demo: pretend playback so the UI can be previewed without mpv. */
+		mp.state = MP_READY;
+		mp_load_playlist();
+		mp.dur = 212;
+		mp.pos = 64;
+	} else if (mp.state == MP_READY) {
 		mp_load_playlist();
 	} else if (mp.state == MP_OFF) {
 		mp.candidate = 0;
@@ -439,6 +450,12 @@ static void mp_prev(void)
 		mp_cmd("\"playlist-prev\",\"weak\"");
 }
 
+static void mp_toggle_loop(void)
+{
+	mp.loop = !mp.loop;
+	mp_cmd("\"set_property\",\"loop-playlist\",\"%s\"", mp.loop ? "inf" : "no");
+}
+
 static void mp_stop(void)
 {
 	mp_cmd("\"stop\"");
@@ -454,12 +471,21 @@ void ui_media_shutdown(void)
 }
 
 /* ====================================================================== */
-/* Now Playing                                                             */
+/* Now Playing (styled after the LVGL music demo)                          */
 /* ====================================================================== */
 
+#define DEMO_DARK 0x504d6d
+#define DEMO_DIM 0x8a86b8
+#define DEMO_BLUE 0x569af8
+#define DEMO_PURPLE 0xa666f1
+#define BARS 32
+
 typedef struct {
-	lv_obj_t *title, *folder, *bar, *t_pos, *t_dur, *play, *vol_bar, *vol_txt, *hint2;
+	lv_obj_t *title, *artist, *genre, *slider, *t_pos, *t_dur, *play_btn, *play_icon;
+	lv_obj_t *loop, *spectrum, *vol_bar, *vol_txt;
 	lv_timer_t *timer;
+	int level[BARS];
+	uint32_t phase;
 } now_t;
 
 static const char *base_name(const char *path)
@@ -469,30 +495,94 @@ static const char *base_name(const char *path)
 	return slash ? slash + 1 : path;
 }
 
+static void spectrum_draw_cb(lv_event_t *e)
+{
+	now_t *n = lv_event_get_user_data(e);
+	lv_obj_t *obj = lv_event_get_target_obj(e);
+	lv_layer_t *layer = lv_event_get_layer(e);
+	lv_area_t area;
+	lv_draw_line_dsc_t dsc;
+	int cx, cy;
+
+	lv_obj_get_coords(obj, &area);
+	cx = (area.x1 + area.x2) / 2;
+	cy = (area.y1 + area.y2) / 2;
+	lv_draw_line_dsc_init(&dsc);
+	dsc.width = 3;
+	dsc.round_start = 1;
+	dsc.round_end = 1;
+	for (int i = 0; i < BARS; i++) {
+		int deg = i * 360 / BARS - 90;
+		int r0 = 30, r1 = 33 + n->level[i] * 13 / 100;
+		int32_t c = lv_trigo_cos(deg), sn = lv_trigo_sin(deg);
+
+		dsc.color = lv_color_mix(lv_color_hex(DEMO_PURPLE), lv_color_hex(DEMO_BLUE),
+					 (uint8_t)(i * 255 / BARS));
+		dsc.p1.x = cx + ((r0 * c) >> 15);
+		dsc.p1.y = cy + ((r0 * sn) >> 15);
+		dsc.p2.x = cx + ((r1 * c) >> 15);
+		dsc.p2.y = cy + ((r1 * sn) >> 15);
+		lv_draw_line(layer, &dsc);
+	}
+}
+
 static void now_update(lv_timer_t *timer)
 {
 	now_t *n = lv_timer_get_user_data(timer);
 	char text[96], t[16];
+	bool live = mp.playing && !mp.paused;
+
+	/* The demo animates a spectrum from audio data; we animate it from the playback state. */
+	n->phase += 11;
+	for (int i = 0; i < BARS; i++) {
+		int target = 8;
+
+		if (live) {
+			int32_t a = lv_trigo_sin((int)((n->phase * 3 + (uint32_t)i * 37) % 360));
+			int32_t b = lv_trigo_sin((int)((n->phase * 5 + (uint32_t)i * 71) % 360));
+
+			target = 45 + (int)(((a + b) * 50) >> 16);
+		}
+		n->level[i] = (n->level[i] * 2 + target) / 3;
+	}
+	lv_obj_invalidate(n->spectrum);
 
 	if (mp.index >= 0 && mp.index < mp.ntracks) {
-		snprintf(text, sizeof(text), "%s", base_name(mp.tracks[mp.index]));
+		char folder[96];
+		const char *file = base_name(mp.tracks[mp.index]);
+		const char *slash = strrchr(mp.tracks[mp.index], '/');
+
+		snprintf(text, sizeof(text), "%s", file);
 		char *dot = strrchr(text, '.');
 
 		if (dot)
 			*dot = '\0';
 		lv_label_set_text(n->title, text);
+		folder[0] = '\0';
+		if (slash && slash != mp.tracks[mp.index]) {
+			const char *p = slash - 1;
+
+			while (p > mp.tracks[mp.index] && *p != '/')
+				p--;
+			if (*p == '/')
+				p++;
+			snprintf(folder, sizeof(folder), "%.*s", (int)(slash - p), p);
+		}
+		lv_label_set_text(n->artist, folder[0] ? folder : "GamePup Music");
 		snprintf(text, sizeof(text), "Track %d of %d", mp.index + 1, mp.ntracks);
-		lv_label_set_text(n->folder, text);
+		lv_label_set_text(n->genre, text);
 	} else {
 		lv_label_set_text(n->title, "Nothing playing");
-		lv_label_set_text(n->folder, "");
+		lv_label_set_text(n->artist, "");
+		lv_label_set_text(n->genre, "");
 	}
-	fmt_time(t, sizeof(t), mp.playing ? mp.pos : -1);
+	fmt_time(t, sizeof(t), mp.playing ? mp.pos : 0);
 	lv_label_set_text(n->t_pos, t);
 	fmt_time(t, sizeof(t), mp.playing && mp.dur > 0 ? mp.dur : -1);
 	lv_label_set_text(n->t_dur, t);
-	lv_bar_set_value(n->bar, mp.dur > 0 ? (int)(mp.pos * 1000 / mp.dur) : 0, LV_ANIM_OFF);
-	lv_label_set_text(n->play, mp.playing && !mp.paused ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+	lv_slider_set_value(n->slider, mp.dur > 0 ? (int)(mp.pos * 1000 / mp.dur) : 0, LV_ANIM_OFF);
+	lv_label_set_text(n->play_icon, live ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+	lv_obj_set_style_text_color(n->loop, lv_color_hex(mp.loop ? DEMO_PURPLE : DEMO_DIM), 0);
 	lv_bar_set_value(n->vol_bar, mp.volume, LV_ANIM_OFF);
 	snprintf(text, sizeof(text), "%d%%", mp.volume);
 	lv_label_set_text(n->vol_txt, text);
@@ -504,8 +594,10 @@ static bool now_key(ui_page_t *page, uint32_t key)
 
 	switch (key) {
 	case LV_KEY_ENTER:
-	case GP_KEY_Y:
 		mp_toggle_pause();
+		break;
+	case GP_KEY_Y:
+		mp_toggle_loop();
 		break;
 	case LV_KEY_LEFT:
 		mp_seek(-SEEK_STEP);
@@ -544,85 +636,125 @@ static void now_hide(ui_page_t *page)
 	free(n);
 }
 
+static lv_obj_t *demo_label(lv_obj_t *parent, const char *text, const lv_font_t *font,
+			    uint32_t color, int x, int y)
+{
+	lv_obj_t *label = ui_label(parent, text, font, color);
+
+	lv_obj_set_pos(label, x, y);
+	return label;
+}
+
+static lv_obj_t *round_btn(lv_obj_t *parent, int size, int x, int y, const char *glyph,
+			   const lv_font_t *font, uint32_t color, bool filled, lv_obj_t **icon)
+{
+	lv_obj_t *btn = lv_obj_create(parent);
+	lv_obj_t *label;
+
+	lv_obj_remove_style_all(btn);
+	lv_obj_set_size(btn, size, size);
+	lv_obj_set_pos(btn, x, y);
+	lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+	lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+	if (filled) {
+		lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+		lv_obj_set_style_bg_color(btn, lv_color_hex(DEMO_BLUE), 0);
+		lv_obj_set_style_bg_grad_color(btn, lv_color_hex(DEMO_PURPLE), 0);
+		lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_VER, 0);
+	}
+	label = ui_label(btn, glyph, font, color);
+	lv_obj_center(label);
+	if (icon)
+		*icon = label;
+	return filled ? btn : label;
+}
+
 static void open_now_playing(void)
 {
-	ui_page_t *page = ui_page_create("Now Playing", "A Pause");
+	ui_page_t *page = ui_page_create("Now Playing", "A Pause  Y Loop");
 	now_t *n = calloc(1, sizeof(*n));
-	lv_obj_t *card, *art, *info, *row, *ctrl;
+	lv_obj_t *card, *disc, *vol_icon;
 
 	page->user = n;
 	page->on_key = now_key;
 	page->on_hide = now_hide;
 	ui_page_add_sink(page);
 
-	card = ui_card(page->content);
-	row = lv_obj_create(card);
-	lv_obj_remove_style_all(row);
-	lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
-	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-	lv_obj_set_style_pad_column(row, 12, 0);
-	lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-	art = ui_icon(row, LV_SYMBOL_AUDIO, C_PINK, 64);
-	(void)art;
-	info = lv_obj_create(row);
-	lv_obj_remove_style_all(info);
-	lv_obj_set_height(info, LV_SIZE_CONTENT);
-	lv_obj_set_flex_grow(info, 1);
-	lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_style_pad_row(info, 3, 0);
-	lv_obj_remove_flag(info, LV_OBJ_FLAG_SCROLLABLE);
-	n->title = ui_label(info, "", FONT_L, C_TEXT);
-	lv_obj_set_width(n->title, LV_PCT(100));
+	card = lv_obj_create(page->content);
+	lv_obj_remove_style_all(card);
+	lv_obj_set_size(card, 300, 164);
+	lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+	lv_obj_set_style_bg_color(card, lv_color_white(), 0);
+	lv_obj_set_style_radius(card, 18, 0);
+	lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_add_flag(card, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+	/* Album disc with radial spectrum bars. */
+	n->spectrum = lv_obj_create(card);
+	lv_obj_remove_style_all(n->spectrum);
+	lv_obj_set_size(n->spectrum, 96, 96);
+	lv_obj_set_pos(n->spectrum, 6, 4);
+	lv_obj_remove_flag(n->spectrum, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_add_event_cb(n->spectrum, spectrum_draw_cb, LV_EVENT_DRAW_POST, n);
+	disc = lv_obj_create(n->spectrum);
+	lv_obj_remove_style_all(disc);
+	lv_obj_set_size(disc, 52, 52);
+	lv_obj_center(disc);
+	lv_obj_set_style_radius(disc, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_opa(disc, LV_OPA_COVER, 0);
+	lv_obj_set_style_bg_color(disc, lv_color_hex(DEMO_BLUE), 0);
+	lv_obj_set_style_bg_grad_color(disc, lv_color_hex(DEMO_PURPLE), 0);
+	lv_obj_set_style_bg_grad_dir(disc, LV_GRAD_DIR_VER, 0);
+	lv_obj_remove_flag(disc, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_center(ui_label(disc, LV_SYMBOL_AUDIO, FONT_XL, 0xFFFFFF));
+
+	/* Title block */
+	n->title = demo_label(card, "", FONT_L, DEMO_DARK, 112, 10);
+	lv_obj_set_width(n->title, 176);
 	lv_label_set_long_mode(n->title, LV_LABEL_LONG_SCROLL_CIRCULAR);
-	n->folder = ui_label(info, "", FONT_S, C_TEXT_DIM);
-	ctrl = lv_obj_create(info);
-	lv_obj_remove_style_all(ctrl);
-	lv_obj_set_size(ctrl, LV_PCT(100), LV_SIZE_CONTENT);
-	lv_obj_set_flex_flow(ctrl, LV_FLEX_FLOW_ROW);
-	lv_obj_set_flex_align(ctrl, LV_FLEX_ALIGN_SPACE_AROUND, LV_FLEX_ALIGN_CENTER,
-			      LV_FLEX_ALIGN_CENTER);
-	lv_obj_remove_flag(ctrl, LV_OBJ_FLAG_SCROLLABLE);
-	ui_label(ctrl, LV_SYMBOL_PREV, FONT_XL, C_TEXT_DIM);
-	n->play = ui_label(ctrl, LV_SYMBOL_PLAY, FONT_XXL, C_TEXT);
-	ui_label(ctrl, LV_SYMBOL_NEXT, FONT_XL, C_TEXT_DIM);
+	n->artist = demo_label(card, "", FONT_S, DEMO_DARK, 112, 34);
+	lv_obj_set_width(n->artist, 176);
+	lv_label_set_long_mode(n->artist, LV_LABEL_LONG_DOT);
+	n->genre = demo_label(card, "", FONT_XS, DEMO_DIM, 112, 52);
 
-	n->bar = lv_bar_create(card);
-	lv_obj_set_size(n->bar, LV_PCT(100), 6);
-	lv_bar_set_range(n->bar, 0, 1000);
-	lv_obj_set_style_bg_color(n->bar, lv_color_hex(0x48506A), LV_PART_MAIN);
-	lv_obj_set_style_bg_color(n->bar, lv_color_hex(C_PINK), LV_PART_INDICATOR);
-	lv_obj_set_style_radius(n->bar, 3, LV_PART_MAIN);
-	lv_obj_set_style_radius(n->bar, 3, LV_PART_INDICATOR);
-	row = lv_obj_create(card);
-	lv_obj_remove_style_all(row);
-	lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
-	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
-			      LV_FLEX_ALIGN_CENTER);
-	lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-	n->t_pos = ui_label(row, "0:00", FONT_XS, C_TEXT_DIM);
-	n->t_dur = ui_label(row, "--:--", FONT_XS, C_TEXT_DIM);
-
-	card = ui_card(page->content);
-	row = lv_obj_create(card);
-	lv_obj_remove_style_all(row);
-	lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
-	lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	lv_obj_set_style_pad_column(row, 8, 0);
-	lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-	ui_label(row, LV_SYMBOL_VOLUME_MID, FONT_M, C_TEXT_DIM);
-	n->vol_bar = lv_bar_create(row);
-	lv_obj_set_height(n->vol_bar, 6);
-	lv_obj_set_flex_grow(n->vol_bar, 1);
+	vol_icon = demo_label(card, LV_SYMBOL_VOLUME_MID, FONT_S, DEMO_DIM, 112, 72);
+	(void)vol_icon;
+	n->vol_bar = lv_bar_create(card);
+	lv_obj_set_size(n->vol_bar, 100, 4);
+	lv_obj_set_pos(n->vol_bar, 136, 79);
 	lv_bar_set_range(n->vol_bar, 0, 100);
-	lv_obj_set_style_bg_color(n->vol_bar, lv_color_hex(0x48506A), LV_PART_MAIN);
-	lv_obj_set_style_bg_color(n->vol_bar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
-	n->vol_txt = ui_label(row, "", FONT_S, C_TEXT_DIM);
-	n->hint2 = ui_label(card, LV_SYMBOL_LEFT LV_SYMBOL_RIGHT " seek   " LV_SYMBOL_UP LV_SYMBOL_DOWN
-			    " volume   START next   SEL prev   X stop", FONT_XS, C_TEXT_DIM);
+	lv_obj_set_style_bg_color(n->vol_bar, lv_color_hex(0xE4E0F5), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(n->vol_bar, lv_color_hex(DEMO_BLUE), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_grad_color(n->vol_bar, lv_color_hex(DEMO_PURPLE), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_grad_dir(n->vol_bar, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
+	n->vol_txt = demo_label(card, "", FONT_XS, DEMO_DIM, 244, 72);
 
-	n->timer = lv_timer_create(now_update, 250, n);
+	/* Progress slider and times */
+	n->slider = lv_slider_create(card);
+	lv_obj_set_size(n->slider, 272, 5);
+	lv_obj_set_pos(n->slider, 14, 108);
+	lv_slider_set_range(n->slider, 0, 1000);
+	lv_obj_remove_flag(n->slider, LV_OBJ_FLAG_CLICKABLE);
+	lv_obj_set_style_bg_color(n->slider, lv_color_hex(0xE4E0F5), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(n->slider, lv_color_hex(DEMO_BLUE), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_grad_color(n->slider, lv_color_hex(DEMO_PURPLE), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_grad_dir(n->slider, LV_GRAD_DIR_HOR, LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(n->slider, lv_color_white(), LV_PART_KNOB);
+	lv_obj_set_style_border_width(n->slider, 0, LV_PART_MAIN);
+	lv_obj_set_style_border_width(n->slider, 2, LV_PART_KNOB);
+	lv_obj_set_style_border_color(n->slider, lv_color_hex(DEMO_PURPLE), LV_PART_KNOB);
+	lv_obj_set_style_pad_all(n->slider, 2, LV_PART_KNOB);
+	n->t_pos = demo_label(card, "0:00", FONT_XS, DEMO_DIM, 14, 118);
+	n->t_dur = demo_label(card, "--:--", FONT_XS, DEMO_DIM, 258, 118);
+
+	/* Transport row: loop, prev, play, next, stop */
+	n->loop = round_btn(card, 32, 24, 126, LV_SYMBOL_LOOP, FONT_L, DEMO_DIM, false, NULL);
+	round_btn(card, 32, 76, 126, LV_SYMBOL_PREV, FONT_L, DEMO_DARK, false, NULL);
+	n->play_btn = round_btn(card, 40, 130, 122, LV_SYMBOL_PLAY, FONT_L, 0xFFFFFF, true, &n->play_icon);
+	round_btn(card, 32, 192, 126, LV_SYMBOL_NEXT, FONT_L, DEMO_DARK, false, NULL);
+	round_btn(card, 32, 244, 126, LV_SYMBOL_STOP, FONT_L, DEMO_DIM, false, NULL);
+
+	n->timer = lv_timer_create(now_update, 60, n);
 	now_update(n->timer);
 	ui_push(page);
 }
@@ -632,15 +764,15 @@ static void open_now_playing(void)
 /* ====================================================================== */
 
 typedef struct {
-	char cwd[512];
-	char root[512];
+	char cwd[1100];
+	char root[1100];
 	ui_page_t *page;
 	lv_timer_t *timer;
 	lv_obj_t *bar_title;
 } browser_t;
 
 typedef struct {
-	char path[768];
+	char path[1100];
 	bool dir;
 } entry_t;
 
@@ -658,7 +790,7 @@ static void browser_load(browser_t *b, const char *dir);
 /* Rebuilding the list deletes the row whose event is being dispatched, so defer it. */
 typedef struct {
 	browser_t *b;
-	char path[768];
+	char path[1100];
 } load_req_t;
 
 static void load_async(void *arg)
@@ -686,7 +818,7 @@ static void now_row_cb(lv_event_t *e)
 
 typedef struct {
 	browser_t *b;
-	char path[768];
+	char path[1100];
 	bool dir, up;
 } click_t;
 
@@ -699,7 +831,7 @@ static void browser_entry_cb(lv_event_t *e)
 {
 	click_t *c = lv_event_get_user_data(e);
 	browser_t *b = c->b;
-	char target[768];
+	char target[1100];
 
 	if (c->up) {
 		char *slash;
@@ -727,11 +859,12 @@ static void browser_entry_cb(lv_event_t *e)
 		if (!d)
 			return;
 		while ((ent = readdir(d))) {
-			char full[768];
+			char full[1100];
 
 			if (ent->d_name[0] == '.' || !is_audio_name(ent->d_name))
 				continue;
-			snprintf(full, sizeof(full), "%s/%s", b->cwd, ent->d_name);
+			if (snprintf(full, sizeof(full), "%s/%s", b->cwd, ent->d_name) >= (int)sizeof(full))
+				continue;
 			if (n == cap) {
 				cap = cap ? cap * 2 : 32;
 				list = realloc(list, (size_t)cap * sizeof(*list));
@@ -753,9 +886,14 @@ static void browser_entry_cb(lv_event_t *e)
 	}
 }
 
-static void browser_load(browser_t *b, const char *dir)
+static void browser_load(browser_t *b, const char *dir_in)
 {
-	DIR *d = opendir(dir);
+	char dir[1100];
+	DIR *d;
+
+	/* dir_in may alias b->cwd; copy before overwriting it. */
+	snprintf(dir, sizeof(dir), "%s", dir_in);
+	d = opendir(dir);
 	struct dirent *ent;
 	entry_t *list = NULL;
 	int n = 0, cap = 0;
@@ -769,7 +907,7 @@ static void browser_load(browser_t *b, const char *dir)
 	lv_group_remove_all_objs(b->page->group);
 	lv_obj_clean(b->page->content);
 	while ((ent = readdir(d))) {
-		char full[768];
+		char full[1100];
 		struct stat st;
 
 		if (ent->d_name[0] == '.')
@@ -793,10 +931,18 @@ static void browser_load(browser_t *b, const char *dir)
 	ui_section(b->page->content, label);
 
 	if (mp.playing || mp.ntracks) {
-		lv_obj_t *row = ui_row(b->page, b->page->content, LV_SYMBOL_PLAY, C_PINK, "Now playing",
+		/* Mini player in the music demo's light-card style. */
+		lv_obj_t *row = ui_row(b->page, b->page->content, LV_SYMBOL_AUDIO, DEMO_PURPLE, "Now playing",
 				       mp.index >= 0 && mp.index < mp.ntracks ?
 				       base_name(mp.tracks[mp.index]) : NULL);
-		ui_row_chevron(row);
+
+		lv_obj_set_style_bg_color(row, lv_color_white(), 0);
+		lv_obj_set_style_bg_color(row, lv_color_hex(0xEFEAFE), LV_STATE_FOCUSED);
+		lv_obj_set_style_text_color(ui_row_title(row), lv_color_hex(DEMO_DARK), 0);
+		if (ui_row_subtitle(row))
+			lv_obj_set_style_text_color(ui_row_subtitle(row), lv_color_hex(DEMO_DIM), 0);
+		lv_obj_set_style_text_color(ui_row_chevron(row), lv_color_hex(DEMO_PURPLE), 0);
+		lv_label_set_text(lv_obj_get_child(row, -1), mp.paused ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
 		lv_obj_add_event_cb(row, now_row_cb, LV_EVENT_CLICKED, NULL);
 	}
 	if (strcmp(dir, b->root)) {
@@ -833,6 +979,11 @@ static void browser_load(browser_t *b, const char *dir)
 			     list[i].dir ? C_ORANGE : C_PINK, name, NULL);
 		if (list[i].dir)
 			ui_row_chevron(row);
+		else if (mp.index >= 0 && mp.index < mp.ntracks && !strcmp(mp.tracks[mp.index], list[i].path)) {
+			lv_obj_set_style_text_color(ui_row_title(row), lv_color_hex(DEMO_PURPLE), 0);
+			ui_row_value(row, LV_SYMBOL_PLAY);
+			lv_obj_set_style_text_color(lv_obj_get_child(row, -1), lv_color_hex(DEMO_PURPLE), 0);
+		}
 		c->b = b;
 		c->dir = list[i].dir;
 		snprintf(c->path, sizeof(c->path), "%s", list[i].path);
@@ -850,7 +1001,7 @@ static bool browser_key(ui_page_t *page, uint32_t key)
 	browser_t *b = page->user;
 
 	if (key == LV_KEY_ESC && strcmp(b->cwd, b->root)) {
-		char target[768], *slash;
+		char target[1100], *slash;
 
 		snprintf(target, sizeof(target), "%s", b->cwd);
 		slash = strrchr(target, '/');
