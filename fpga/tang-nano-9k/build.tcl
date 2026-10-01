@@ -3,6 +3,10 @@ set_device GW1NR-LV9QN88PC6/I5 -name GW1NR-9C
 add_file rtl/lcd_timing.v
 add_file rtl/test_pattern.v
 add_file rtl/pll_pix.v
+add_file rtl/spi_slave.v
+add_file rtl/dbi_decoder.v
+add_file rtl/framestore_bsram.v
+add_file rtl/lcd_scanout.v
 add_file rtl/top.v
 add_file constraints/tangnano9k_lcd.cst
 add_file constraints/tangnano9k.sdc

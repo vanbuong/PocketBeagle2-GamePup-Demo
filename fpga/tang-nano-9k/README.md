@@ -37,15 +37,57 @@ The decoder outputs a frame-store write port (`wr_en`, `wr_addr = y*480+x`,
 does not exist yet; the testbench uses a behavioural array.
 Reset (`rst_n`) resets decoder state only; LCD timing keeps running.
 
+## Milestone 3 - frame store interface + BSRAM bring-up version
+
+`top.v` is now the full path (`SHOW_PATTERN=0`, default; set 1 for the
+milestone-1 test pattern):
+
+```
+SPI_SCK/MOSI/CS_N + DBI_DC --> spi_slave --> dbi_decoder --> framestore --> lcd_scanout --> LCD pins
+DBI_RST_N -----------------------------^   (decoder state only)
+```
+
+Frame store port list (the PSRAM version will keep it):
+
+| port | clock | meaning |
+|---|---|---|
+| `wr_en, wr_addr[16:0], wr_data[15:0]` | `clk_w` (27 MHz) | RGB565 pixel at `y*480+x` |
+| `rd_addr[16:0]` -> `rd_data[15:0]` | `clk_r` (9 MHz pixel) | RGB565, 1 clock latency |
+
+`rtl/framestore_bsram.v` is the bring-up version. A full 480x272 RGB565 frame
+(2.09 Mb) does not fit the 468 kb of BSRAM, so it keeps only the top
+`R_BITS/G_BITS/B_BITS` of each channel (default 1/1/1 = **8 colours**,
+391,680 bits ~ 24 of 26 BSRAM blocks) and re-expands to RGB565 on read.
+Good enough to see the Linux console/menu and verify SPI, DC, reset, windows
+and timing on real hardware before the PSRAM controller exists.
+`display_on` (DISPON/DISPOFF) blanks the LCD output.
+
+SPI pins (`constraints/tangnano9k_lcd.cst`), 3.3 V, taken from a working
+Tang Nano 9K project, not from the schematic:
+
+| signal | Tang Nano 9K pin | PocketBeagle 2 (cape wiring) |
+|---|---|---|
+| SPI_SCK | IO36 (shares microSD clock - keep SD slot empty) | P1.08 |
+| SPI_MOSI | IO25 | P1.12 |
+| SPI_CS_N | IO27 | P1.06 |
+| DBI_DC | IO28 | P2.17 |
+| DBI_RST_N | IO29 | P2.19 |
+| GND | GND | GND |
+
+`sim/tb_top.v` drives SPI into `top`, captures a frame from the LCD pins and
+checks pixels, blanking after DISPOFF. Mutation-tested (address off-by-one and
+ignoring display_on both fail it).
+
 ## Not yet verified on hardware
 
 - rPLL settings in `pll_pix.v` (VCO 432 MHz, ODIV 48) - confirm in the Gowin IP generator.
 - Panel porch/sync values and polarity: check the 4.3" panel datasheet
   (`H_FP/H_SYNC/H_BP`, `V_*`, `*_ACTIVE_LOW` parameters in `lcd_timing.v`).
 - LCD pin numbers come from Sipeed's example, not from this board's schematic.
-- Expected result: white 1 px border around the full panel, 8 colour bars on
+- Gowin must infer the 3 x 1-bit x 130,560 memory as BSRAM (check the resource report; fall back to explicit SDPB primitives if it uses LUT/FF), and accept the `expand` function.
+- Expected result (pattern mode): white 1 px border around the full panel, 8 colour bars on
   top, a grey ramp at the bottom, white cross-hair in the centre.
 
 ## Next
 
-PSRAM frame store (Gowin IP wrapper) with a write port for the decoder and a line-buffered read port for the LCD scan-out; then pick SPI/DC/reset pins and wire everything into `top.v`.
+`framestore_psram.v` (Gowin PSRAM IP wrapper, full RGB565) behind the same ports, with a line buffer on the read side; then the device-tree overlay, panel-mipi-dbi firmware blob and userspace 480x272 port.
