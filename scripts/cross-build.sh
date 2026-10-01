@@ -179,7 +179,7 @@ build_userspace() {
 	install -m 0644 "$include_dir/libretro.h" "$DIST_DIR/include/libretro.h"
 
 	make -C "$ROOT_DIR/emulator" clean
-	make -C "$ROOT_DIR/emulator" -j"$BUILD_JOBS" \
+	make -C "$ROOT_DIR/emulator" -j"$BUILD_JOBS" all gamepup-ui \
 		CC="$CROSS_GCC" \
 		LIBRETRO_INCLUDE="$include_dir" \
 		KHRONOS_INCLUDE="$ROOT_DIR/emulator/khronos" \
@@ -189,6 +189,7 @@ build_userspace() {
 		"$ROOT_DIR/emulator/gamepup-retro" \
 		"$ROOT_DIR/emulator/gamepup-oled-status" \
 		"$ROOT_DIR/emulator/gamepup-gpu-bench" \
+		"$ROOT_DIR/emulator/gamepup-ui" \
 		"$DIST_DIR/bin/"
 	make -C "$ROOT_DIR/emulator" clean
 }

@@ -78,7 +78,7 @@ overlay_extlinux_path() {
 
 missing_packages=
 for package in build-essential ca-certificates curl device-tree-compiler \
-	dosfstools gcc-14 libgif-dev mpv alsa-utils; do
+	dosfstools gcc-14 git libgif-dev mpv alsa-utils; do
 	if ! dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | \
 		grep -q '^ii'; then
 		missing_packages="$missing_packages $package"
@@ -190,6 +190,15 @@ if [ -e "$SCRIPT_DIR/emulator/gamepup-retro" ]; then
 fi
 install -m 0755 "$SCRIPT_DIR/emulator/gamepup-oled-status" \
 	/usr/local/bin/gamepup-oled-status
+# LVGL phone-style launcher (fetches the pinned LVGL release). If it cannot be
+# built, the legacy Python menu stays in service.
+UI_EXEC=/usr/local/bin/gamepup-ui
+if make -C "$SCRIPT_DIR/emulator" gamepup-ui; then
+	install -m 0755 "$SCRIPT_DIR/emulator/gamepup-ui" /usr/local/bin/gamepup-ui
+else
+	echo "gamepup-ui (LVGL) failed to build; using the legacy menu." >&2
+	UI_EXEC=/usr/local/bin/gamepup-menu
+fi
 if [ -e "$SCRIPT_DIR/emulator/gamepup-gpu-bench" ]; then
 	install -m 0755 "$SCRIPT_DIR/emulator/gamepup-gpu-bench" \
 		/usr/local/bin/gamepup-gpu-bench
@@ -235,6 +244,7 @@ install -m 0644 "$SCRIPT_DIR/emulator/gamepup-rom-import-watch.service" \
 	/etc/systemd/system/gamepup-rom-import-watch.service
 sed -e "s/^User=beagle$/User=$DEVICE_USER/" \
 	-e "s/^Group=beagle$/Group=$DEVICE_USER/" \
+	-e "s#^ExecStart=.*#ExecStart=$UI_EXEC#" \
 	"$SCRIPT_DIR/emulator/gamepup-game.service" \
 	> /etc/systemd/system/gamepup-game.service
 chmod 0644 /etc/systemd/system/gamepup-game.service

@@ -94,42 +94,50 @@ Capture example (after a future capture-capable card is present):
 arecord -D plughw:0,0 -c 2 -r 48000 -f S32_LE -d 5 /tmp/mic.wav
 aplay -D plughw:GamePupMAX98357 /tmp/mic.wav
 ```
-`TOOLS > VOICE MEMO` records and plays clips through this card. Memos are stored
+The **Voice Memo** app records and plays clips through this card. Memos are stored
 as WAV files under `/opt/gamepup/voice-memos/` (`memo-YYYYMMDD-HHMMSS.wav`).
-In the tool: **A** starts/stops recording or plays a memo, **Select** deletes,
+In the app: **A** starts/stops recording or plays a memo, **Select** deletes,
 **B** goes back. Max length is 120 seconds. Override the ALSA device with
 `GAMEPUP_ALSA_DEVICE` if needed.
 
 ## Screenshots
 
-The images below are native captures from the original 128x160 GamePup LCD.
-They remain as historical UI references; the current tree targets an ILI9341
-landscape **320x240** framebuffer. Click one to view it at its original pixel
-resolution.
+The launcher is an [LVGL](https://lvgl.io) phone-style UI (status bar, app grid,
+back-arrow title bars, grouped settings, toasts and slide transitions) rendered
+natively at **320x240**. These images are produced by the same code the device
+runs, using sample data with no ROM imagery (see
+[`docs/screenshots/README.md`](docs/screenshots/README.md)). Click one to view it
+at its original pixel resolution.
 
 <table>
   <tr>
-    <td align="center"><a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" width="192" alt="GamePup home screen"></a><br><strong>Home</strong></td>
-    <td align="center"><a href="docs/screenshots/tools.png"><img src="docs/screenshots/tools.png" width="192" alt="Tools folder"></a><br><strong>Tools</strong></td>
-    <td align="center"><a href="docs/screenshots/rom-import.png"><img src="docs/screenshots/rom-import.png" width="192" alt="USB ROM import screen"></a><br><strong>USB ROM import</strong></td>
-    <td align="center"><a href="docs/screenshots/hardware-test.png"><img src="docs/screenshots/hardware-test.png" width="192" alt="Hardware tester"></a><br><strong>Hardware tester</strong></td>
+    <td align="center"><a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" width="240" alt="GamePup home screen"></a><br><strong>Home</strong></td>
+    <td align="center"><a href="docs/screenshots/home-page2.png"><img src="docs/screenshots/home-page2.png" width="240" alt="Second home page"></a><br><strong>Home, page 2</strong></td>
+    <td align="center"><a href="docs/screenshots/games.png"><img src="docs/screenshots/games.png" width="240" alt="NES game list"></a><br><strong>Game list</strong></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="192" alt="Settings screen"></a><br><strong>Settings</strong></td>
-    <td align="center"><a href="docs/screenshots/second-screen.png"><img src="docs/screenshots/second-screen.png" width="192" alt="Second-screen settings"></a><br><strong>Second screen</strong></td>
-    <td align="center"><a href="docs/screenshots/about.png"><img src="docs/screenshots/about.png" width="192" alt="About screen"></a><br><strong>About</strong></td>
-    <td align="center"><a href="docs/screenshots/benchmarks.png"><img src="docs/screenshots/benchmarks.png" width="192" alt="GPU benchmark menu"></a><br><strong>Benchmarks</strong></td>
+    <td align="center"><a href="docs/screenshots/music.png"><img src="docs/screenshots/music.png" width="240" alt="Music browser"></a><br><strong>Music</strong></td>
+    <td align="center"><a href="docs/screenshots/voice-memo.png"><img src="docs/screenshots/voice-memo.png" width="240" alt="Voice memo list"></a><br><strong>Voice memo</strong></td>
+    <td align="center"><a href="docs/screenshots/import.png"><img src="docs/screenshots/import.png" width="240" alt="USB ROM import"></a><br><strong>USB ROM import</strong></td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/screenshots/gpu-plasma.png"><img src="docs/screenshots/gpu-plasma.png" width="192" alt="PowerVR plasma benchmark"></a><br><strong>GPU plasma</strong></td>
-    <td align="center"><a href="docs/screenshots/gpu-gears.png"><img src="docs/screenshots/gpu-gears.png" width="192" alt="PowerVR GL gears benchmark"></a><br><strong>GL gears</strong></td>
+    <td align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="240" alt="Settings screen"></a><br><strong>Settings</strong></td>
+    <td align="center"><a href="docs/screenshots/second-screen.png"><img src="docs/screenshots/second-screen.png" width="240" alt="Second-screen settings"></a><br><strong>Second screen</strong></td>
+    <td align="center"><a href="docs/screenshots/hardware-test.png"><img src="docs/screenshots/hardware-test.png" width="240" alt="Hardware tester"></a><br><strong>Hardware test</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/screenshots/benchmarks.png"><img src="docs/screenshots/benchmarks.png" width="240" alt="GPU benchmark menu"></a><br><strong>Benchmarks</strong></td>
+    <td align="center"><a href="docs/screenshots/about.png"><img src="docs/screenshots/about.png" width="240" alt="About screen"></a><br><strong>About</strong></td>
+    <td align="center"><a href="docs/screenshots/gpu-plasma.png"><img src="docs/screenshots/gpu-plasma.png" width="192" alt="PowerVR plasma benchmark (legacy 128x160 capture)"></a><br><strong>GPU plasma</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/screenshots/gpu-gears.png"><img src="docs/screenshots/gpu-gears.png" width="192" alt="PowerVR GL gears benchmark (legacy 128x160 capture)"></a><br><strong>GL gears</strong></td>
     <td align="center"><a href="emulator/gifs/bongo-cat.gif"><img src="emulator/gifs/bongo-cat.gif" width="192" alt="Bongo cat OLED animation"></a><br><strong>OLED animation</strong></td>
   </tr>
 </table>
 
-Only project UI and original benchmark/art assets are shown here; no ROM or
-commercial game imagery is included. Capture provenance is documented in
-[`docs/screenshots/README.md`](docs/screenshots/README.md).
+The two GPU benchmark images are original captures from the earlier 128x160 LCD.
+No ROM or commercial game imagery is included.
 
 ## Displays and render resolutions
 
@@ -415,7 +423,7 @@ ignores host metadata, prevents archive path traversal, and atomically installs
 files into the appropriate `/opt/gamepup` directory. Identical files are left
 unchanged. Inbox copies remain on the USB drive until deleted there.
 
-`TOOLS > IMPORT USB ROMS` provides a manual fallback. Always eject the drive on
+The **Import** app (home page 2) provides a manual fallback with an **Import now** button. Always eject the drive on
 the host first; the importer detaches the mass-storage LUN while reading it so
 Linux and the host never mount the FAT filesystem at the same time.
 
@@ -471,14 +479,34 @@ The installer deliberately blacklists the upstream `powervr` module because
 TI's proprietary userspace must be paired with its `pvrsrvkm` kernel module.
 It also forces GCC 14 for DKMS to match the Armbian vendor kernel compiler.
 
-## On-device menu
+## On-device launcher (LVGL)
 
-The `gamepup-game` service has a hierarchical framebuffer menu with folders for
-NES, Game Boy/Color, Nintendo 64 games, benchmarks, and tools, plus direct Doom
-and settings entries.
-Use Up/Down to select, A or Start to enter/launch, and B to return to the home
-screen. While playing, hold Start+Select for about one second to save, exit, and
-return to the current game folder (or directly to the home screen from Doom).
+The `gamepup-game` service runs `gamepup-ui`, a C application built on
+[LVGL 9](https://lvgl.io) with a phone-style interface: a status bar (clock,
+sound state, SoC temperature), a home screen with a clock widget and a paged
+grid of app icons (red badges show how many games each system has), iOS-style
+grouped rows with switches and sliders, toasts, and slide transitions between
+screens. Home page 1 holds NES, Game Boy, N64, DOOM, Music, Voice Memo,
+Benchmarks and Settings; page 2 holds Import, Hardware, 2nd Screen and About.
+
+Controls: D-pad to move, **A** to open/select, **B** to go back, **X** to jump
+to the home screen, **Start** also activates the highlighted item. While playing,
+hold Start+Select for about one second to save, exit, and return to the launcher.
+Music, voice memos, ROM import, the hardware tester and the OLED settings are
+all built into `gamepup-ui` (the old Python tools are kept only as a fallback).
+
+The UI is built from `emulator/ui/` (LVGL is fetched at the pinned tag
+`v9.2.2` by `emulator/ui/fetch-lvgl.sh`). On a workstation you can render any
+screen headlessly without hardware:
+
+```sh
+make -C emulator gamepup-ui
+GAMEPUP_ROOT=/tmp/sample ./emulator/gamepup-ui --headless /tmp/shots \
+    --script "right*7;enter;shot:settings"   # writes /tmp/shots/settings.ppm
+```
+
+`install.sh` builds `gamepup-ui` and falls back to the legacy Python
+`gamepup-menu` if LVGL cannot be fetched or compiled.
 
 Settings provides persistent toggles for all sound and menu beeps, an eight-step
 hardware-PWM backlight slider adjusted with D-pad Left/Right (sysfs path
@@ -487,7 +515,7 @@ hardware-PWM backlight slider adjusted with D-pad Left/Right (sysfs path
 console. Muted games skip ALSA PCM open (menu beeps still use the PWM buzzer
 unless menu beeps are muted separately).
 
-The `SECOND SCREEN` settings submenu provides persistent controls for turning
+The **2nd Screen** page (also under Settings) provides persistent controls for turning
 the OLED status display on or off, its eight-step brightness slider, a 5–30 Hz
 refresh-rate slider, and a mode toggle between system status and animated GIFs.
 Use Left/Right on the `GIF` row to select any animation installed in
@@ -495,14 +523,14 @@ Use Left/Right on the `GIF` row to select any animation installed in
 mode also controls the live AM625 clock, total/per-core CPU view, and live
 PowerVR utilization. Changes are applied immediately without a reboot.
 
-`BEZEL` selects an optional main-display frame used while playing. `OFF` leaves
+The **Game bezel** setting selects an optional main-display frame used while playing. `OFF` leaves
 black letterbox bands, `GAMEPUP` uses the dark green house design, `ARCADE` uses
 a cyan/magenta checker design, and `SYSTEM` automatically uses generated NES,
 Game Boy Color, Nintendo 64, or Doom artwork with the system name split across
 the top and bottom bands. All styles preserve the game's correct aspect ratio
 and apply the next time a game is launched.
 
-The Settings `ABOUT` page shows menu version 1.9.0, the PocketBeagle 2/Armbian
+The **About** page shows launcher version 2.0.0, the PocketBeagle 2/Armbian
 system identity, and the project owner's GitHub handle, `@Grippy98`.
 
 When sound is enabled, menu navigation has short ascending/descending chirps,
@@ -519,12 +547,12 @@ throughout. If you launch the menu by hand, run
 
 ## Voice memo
 
-Open `TOOLS > VOICE MEMO` to record and play clips on the MAX98357 / INMP441
+Open **Voice Memo** to record and play clips on the MAX98357 / INMP441
 I2S path. Clips are stored as WAV files under `/opt/gamepup/voice-memos/`.
 
 | Control | Action |
 |---|---|
-| A / Start on **+ NEW RECORDING** | Start recording |
+| A / Start on **New recording** | Start recording |
 | A / Start while recording | Stop and save |
 | B while recording | Cancel |
 | A / Start on a memo | Play |
@@ -536,27 +564,30 @@ Max length is 120 seconds at 48 kHz stereo S32_LE. Requires `alsa-utils`
 
 ## Music player
 
-Open `TOOLS > MUSIC PLAYER` to browse `/opt/gamepup/music/` and play tracks
+Open **Music** to browse `/opt/gamepup/music/` and play tracks
 through the MAX98357 (mpv → ALSA). Subfolders are supported. Copy
 `mp3` / `ogg` / `flac` / `wav` / `m4a` / `aac` / `opus` files onto the board
 (or into that folder via SSH/USB).
 
 | Control | Library | Now playing |
 |---|---|---|
-| Up / Down | Move selection | Volume − / + (steps of 5) |
+| Up / Down | Move selection | Volume + / − (steps of 5) |
 | A | Open folder or play file | Pause / resume |
-| Start | Volume + (while playing) | Pause / resume |
+| Y | Pause / resume | Pause / resume |
 | B | Parent folder / exit | Back to library (keeps playing) |
-| Left / Right | Parent (Left) / seek if playing | Seek −5s / +5s |
-| Y / X | Previous / next track | Previous / next track |
-| Select | Volume − (stop at 0) | Stop |
+| Left / Right | — | Seek −5s / +5s |
+| Start / Select | — | Next / previous track |
+| X | Home screen | Stop playback |
+
+Music keeps playing in the background while you browse; the library shows a
+**Now playing** row to jump back.
 
 Volume is the ALSA softvol control `PCM` on the MAX98357 card (the amp has no hardware mixer). mpv stays at unity gain. The level (0–100) is stored in `/opt/gamepup/saves/music-volume` and applied with `amixer`.
 Requires `mpv`. Override the ALSA device with `GAMEPUP_ALSA_DEVICE` if needed.
 
 ## Hardware tester
 
-Open `TOOLS > HARDWARE TEST` to check all ten controls. A button turns yellow
+Open **Hardware** (home page 2) to check all ten controls. A button turns yellow
 while held and stays green after it has been tested. The same screen provides
 direct output tests:
 

@@ -72,6 +72,7 @@ jobs:
           file dist/bin/gamepup-retro | grep -q 'ARM aarch64'
           file dist/bin/gamepup-oled-status | grep -q 'ARM aarch64'
           file dist/bin/gamepup-gpu-bench | grep -q 'ARM aarch64'
+          file dist/bin/gamepup-ui | grep -q 'ARM aarch64'
           file dist/modules/ili9341.ko | grep -q 'ARM aarch64'
           file dist/modules/drm_mipi_dbi.ko | grep -q 'ARM aarch64'
           file dist/libretro/nestopia_libretro.so | grep -q 'ARM aarch64'

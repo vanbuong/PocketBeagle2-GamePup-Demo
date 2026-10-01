@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# install.sh rewrites User=/Group= to DEVICE_USER (beagle, or the board login).
+# install.sh rewrites User=/Group= to DEVICE_USER (beagle, or the board login)
+# and falls back to the legacy gamepup-menu if the LVGL gamepup-ui is missing.
 [Unit]
 Description=GamePup game selection menu
 After=multi-user.target
@@ -13,7 +14,7 @@ RuntimeDirectory=gamepup
 RuntimeDirectoryMode=0755
 ExecStartPre=+/usr/local/libexec/gamepup-fbcon detach
 ExecStartPre=+/usr/local/libexec/gamepup-backlight-permissions grant
-ExecStart=/usr/local/bin/gamepup-menu
+ExecStart=/usr/local/bin/gamepup-ui
 ExecStopPost=+/usr/local/libexec/gamepup-backlight-permissions revoke
 ExecStopPost=+/usr/local/libexec/gamepup-fbcon attach
 Restart=on-failure

@@ -34,3 +34,6 @@ __pycache__/
 
 # Unused legacy photo-derived bezel experiments have unclear provenance.
 emulator/bezels/*-photo.rgb
+emulator/gamepup-ui
+emulator/ui/lvgl/
+emulator/ui/build/
