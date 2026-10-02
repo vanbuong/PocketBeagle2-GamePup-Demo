@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: FPGA (Tang Nano 9K)
+
+on:
+  push:
+    branches: [main, 'cursor/**', 'claude/**']
+    paths: ['fpga/**', '.github/workflows/fpga.yml']
+  pull_request:
+    paths: ['fpga/**', '.github/workflows/fpga.yml']
+  workflow_dispatch:
+    inputs:
+      run_gowin:
+        description: 'Also build with Gowin EDA on a self-hosted runner labelled "gowin"'
+        type: boolean
+        default: false
+
+concurrency:
+  group: fpga-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulate:
+    name: RTL simulation (iverilog)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install iverilog
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends iverilog
+      - name: Run all testbenches
+        run: make -C fpga/tang-nano-9k sim
+
+  bitstream:
+    name: Bitstream (yosys + nextpnr + apycula)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: fpga/tang-nano-9k/ci/requirements.txt
+      - name: Install the open-source Gowin toolchain
+        run: pip install -r fpga/tang-nano-9k/ci/requirements.txt
+      - name: PLL parameters, BSRAM build (P&R + timing + bitstream), PSRAM synthesis
+        run: sh fpga/tang-nano-9k/ci/build-oss.sh all
+      - name: Upload bitstream and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tangnano9k-bsram-bitstream
+          path: |
+            fpga/tang-nano-9k/build/oss/tangnano9k_lcd.fs
+            fpga/tang-nano-9k/build/oss/*.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Gowin EDA is not redistributable, so it cannot be installed on GitHub-hosted runners.
+  # Run it on your own machine registered as a self-hosted runner with the label "gowin"
+  # (gw_sh in PATH) and start this workflow manually with run_gowin enabled. The full-colour
+  # PSRAM bitstream additionally needs the Gowin PSRAM IP in fpga/tang-nano-9k/ip/psram/ on
+  # that machine (see ip/psram/README.md); without it only the BSRAM bitstream is built.
+  gowin-eda:
+    name: Gowin EDA build (self-hosted)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gowin
+    runs-on: [self-hosted, gowin]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: BSRAM build
+        working-directory: fpga/tang-nano-9k
+        run: gw_sh build.tcl
+      - name: PSRAM build (needs the generated IP)
+        working-directory: fpga/tang-nano-9k
+        run: |
+          if ls ip/psram/*.v ip/psram/*/*.v >/dev/null 2>&1; then
+            gw_sh build.tcl psram
+          else
+            echo "No Gowin PSRAM IP under ip/psram/ on this runner; skipping the PSRAM build."
+          fi
+      - name: Upload bitstreams
+        uses: actions/upload-artifact@v4
+        with:
+          name: tangnano9k-gowin-bitstreams
+          path: fpga/tang-nano-9k/impl/pnr/*.fs
+          if-no-files-found: warn
+          retention-days: 14

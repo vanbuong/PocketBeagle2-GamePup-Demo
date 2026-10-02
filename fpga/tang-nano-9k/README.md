@@ -134,7 +134,8 @@ IPUG943 / on the board:
 - Minimum command spacing `T_CMD = 14` clocks for burst 16 (Gowin's example) and
   read latency; `psram_ctrl` waits for all 4 read beats and sets `err_timeout` if the
   IP never answers.
-- `clk_out` is 74.25 MHz with a 148.5 MHz `memory_clk`; `pll_mem.v` is hand-computed.
+- `clk_out` is 74.25 MHz with a 148.5 MHz `memory_clk`; `pll_mem.v` parameters pass the
+  VCO/PFD range check in CI but the output frequency is not tested on hardware.
   No timing constraints exist yet for `clk_out` in `constraints/tangnano9k.sdc`.
 - Gowin must map the 64-bit line buffer (256 x 64) to BSRAM and the FIFO to LUT RAM.
 
@@ -142,22 +143,31 @@ If the picture is wrong: first check that the screen is black after reset (clear
 works), then that rows from `fbi`/the console appear (writes), then banding or
 shifted pixels (word/byte order or `ADDR_SHIFT`).
 
-## Synthesis sanity check (Yosys `synth_gowin`, not Gowin EDA)
+## CI and the open-source flow
 
-Run with the Gowin PLL and PSRAM IP as black boxes, to catch problems before Gowin EDA:
+`.github/workflows/fpga.yml` runs on every change under `fpga/`:
 
-| build | result |
+| job | what it checks |
 |---|---|
-| BSRAM (`top_bsram`) | ~1,240 cells, 24 block RAMs (`DP`), ~590 LUT4 of 8,640 |
-| PSRAM (`top_psram`) | ~11,000 cells incl. mux cells, ~6,000 LUTs (about 70%), line buffer in BSRAM, FIFO in LUT RAM, ~1,000 flip-flops |
+| `simulate` | `make sim`: all testbenches (iverilog) |
+| `bitstream` | `ci/build-oss.sh all` with yosys + nextpnr-himbaechel + apycula (pinned in `ci/requirements.txt`, installed from PyPI): <br>- both PLLs' parameters are accepted by `gowin_pack` (VCO/PFD ranges)<br>- the **BSRAM build is placed & routed, must meet timing at 50 MHz, and packed into `tangnano9k_lcd.fs`**, uploaded as an artifact<br>- the **PSRAM build is synthesised** with the Gowin IP black-boxed and must fit the chip |
+| `gowin-eda` | optional, manual (`run_gowin`), **self-hosted runner labelled `gowin`** with Gowin EDA installed: `gw_sh build.tcl` (+ `psram` if the IP is in `ip/psram/`) |
 
-Problems this found and that are fixed: a single wide memory with range guards mapped to
-~94,000 LUT/mux cells (now one 1-bit memory per stored bit, power-of-two depth, with
-`syn_ramstyle="block_ram"` / `ram_style="block"` attributes); and a synchroniser reset
-to a non-constant value (async load), which Gowin flops cannot implement.
-Yosys is not Gowin's tool: check Gowin EDA's resource report. The PSRAM build is
-mostly the 256-bit write combiner plus its 256-bit snapshot register; if it does not fit
-or fails timing, shrink them (e.g. flush at 8 pixels) before anything else.
+Gowin EDA is not redistributable, so GitHub-hosted runners cannot run it; the open-source flow
+builds the real BSRAM bitstream instead. The full-colour PSRAM bitstream needs Gowin's encrypted IP,
+so it is only built by the self-hosted job. Locally: `pip install -r ci/requirements.txt && make bitstream-oss`
+(a few minutes, output in `build/oss/`).
+
+Last results (open-source flow): BSRAM build 474 of 8,640 LUT4, 244 flip-flops, 24 of 26 block RAMs,
+timing met with large margin (system clock Fmax about 157 MHz, SPI clock about 235 MHz); PSRAM build
+(synthesis only) about 1,330 LUTs, 1,060 flip-flops, 2 block RAMs. An earlier estimate from an old
+yosys (~6,000 LUTs) was too pessimistic. The open-source flow is not Gowin EDA: its numbers are
+estimates for Gowin EDA, and not a hardware test. nextpnr ignores the `.sdc`; every clock is checked
+against one `FREQ` (default 50 MHz).
+
+Bugs this found: a single wide memory mapped to ~94,000 cells (now 24 block RAMs); a flip-flop with a
+non-constant async reset that Gowin flops cannot implement; and **wrong PLL divider settings** (the
+VCO came out at 20 GHz): fixed to `IDIV=2/FBDIV=0/ODIV=48` for 9 MHz and `IDIV=1/FBDIV=10/ODIV=4` for 148.5 MHz.
 
 ## Milestone 5 - on-board 1.14" ST7789 as a second display
 
@@ -196,7 +206,7 @@ Things to know:
 
 ## Not yet verified on hardware
 
-- rPLL settings in `pll_pix.v` (VCO 432 MHz, ODIV 48) - confirm in the Gowin IP generator.
+- rPLL settings in `pll_pix.v` (9 MHz): valid per apycula, not checked on hardware.
 - Panel porch/sync values and polarity: check the 4.3" panel datasheet
   (`H_FP/H_SYNC/H_BP`, `V_*`, `*_ACTIVE_LOW` parameters in `lcd_timing.v`).
 - LCD pin numbers come from Sipeed's example, not from this board's schematic.

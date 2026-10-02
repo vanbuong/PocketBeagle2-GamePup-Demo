@@ -118,8 +118,10 @@ milestone 5. Select with `gamepup-display fpga-small`.
 
 ## Risks / open items
 
-- Gowin EDA is hard to run in GitHub CI (download/account); plan is to build
-  the bitstream locally and commit a release `.fs`, keeping RTL sim in CI.
+- Gowin EDA cannot run on GitHub-hosted runners (not redistributable). CI builds the BSRAM
+  bitstream with the open-source flow (yosys/nextpnr/apycula) and synthesises the PSRAM design;
+  the full-colour PSRAM bitstream needs a self-hosted runner with Gowin EDA + the PSRAM IP
+  (see `.github/workflows/fpga.yml`).
 - 48 MHz SPI over jumper wires may need short leads or series resistors;
   fall back to 32 MHz.
 - Confirm Tang Nano 9K RGB connector pinout and the 4.3" panel timing/polarity

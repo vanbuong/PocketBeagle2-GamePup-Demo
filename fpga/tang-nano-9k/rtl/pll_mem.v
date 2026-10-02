@@ -1,7 +1,9 @@
 // 27 MHz crystal -> 148.5 MHz PSRAM memory clock (the IP derives clk_out = 74.25 MHz).
-// Gowin rPLL: VCO = 27 * (21+1) / (0+1) = 594 MHz, / ODIV 4 = 148.5 MHz.
-// NOT yet verified in Gowin EDA - confirm with the IP generator (same values as the
-// Sipeed-style PSRAM example: 148.5 MHz memory_clk).
+// Gowin rPLL: CLKOUT = FCLKIN * (FBDIV_SEL+1) / (IDIV_SEL+1) = 27 * 11 / 2 = 148.5 MHz,
+// VCO = CLKOUT * ODIV_SEL = 148.5 * 4 = 594 MHz (valid range 400-1200), PFD = 13.5 MHz.
+// The VCO formula and range are checked by apycula's gowin_pack in CI (PSRAM build is
+// not packable without the Gowin IP, so check it with the BSRAM PLL or by hand);
+// not yet verified on hardware.
 module pll_mem (
 	input  wire clkin,    // 27 MHz
 	output wire clkout,   // 148.5 MHz
@@ -16,8 +18,8 @@ module pll_mem (
 	wire clkoutp, clkoutd, clkoutd3;
 	rPLL #(
 		.FCLKIN("27"),
-		.IDIV_SEL(0),
-		.FBDIV_SEL(21),
+		.IDIV_SEL(1),
+		.FBDIV_SEL(10),
 		.ODIV_SEL(4),
 		.DEVICE("GW1NR-9C")
 	) u_pll (

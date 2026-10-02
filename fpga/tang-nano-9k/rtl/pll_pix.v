@@ -1,6 +1,8 @@
 // 27 MHz crystal -> 9 MHz pixel clock.
-// Gowin rPLL: VCO = 27 * (15+1) / (0+1) = 432 MHz, / ODIV 48 = 9 MHz.
-// NOT yet verified in Gowin EDA - confirm with the IP generator.
+// Gowin rPLL: CLKOUT = FCLKIN * (FBDIV_SEL+1) / (IDIV_SEL+1) = 27 * 1 / 3 = 9 MHz,
+// VCO = CLKOUT * ODIV_SEL = 9 * 48 = 432 MHz (valid range 400-1200), PFD = 27/3 = 9 MHz.
+// The VCO formula and range are checked by apycula's gowin_pack in CI; the actual
+// output frequency is not yet checked on hardware.
 // Define SIM for a behavioural stand-in (used by the testbench).
 module pll_pix (
 	input  wire clkin,   // 27 MHz
@@ -20,8 +22,8 @@ module pll_pix (
 	wire clkoutp, clkoutd, clkoutd3;
 	rPLL #(
 		.FCLKIN("27"),
-		.IDIV_SEL(0),
-		.FBDIV_SEL(15),
+		.IDIV_SEL(2),
+		.FBDIV_SEL(0),
 		.ODIV_SEL(48),
 		.DEVICE("GW1NR-9C")
 	) u_pll (

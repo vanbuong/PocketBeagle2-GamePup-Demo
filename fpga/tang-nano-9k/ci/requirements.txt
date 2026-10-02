@@ -1,0 +1,5 @@
+# Open-source Gowin flow used by CI (and `make bitstream-oss`). Pinned: the
+# yosys / nextpnr / apycula versions must match each other.
+apycula==0.32
+yowasp-yosys==0.69.0.0.post1233
+yowasp-nextpnr-himbaechel-gowin==0.11.1.0.post826
