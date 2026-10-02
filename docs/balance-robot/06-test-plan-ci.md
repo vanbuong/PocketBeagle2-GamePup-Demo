@@ -83,7 +83,7 @@ costs minutes to hours; on the host costs seconds.
 | CTL-2 | PID math | step/ramp/steady inputs equal a hand-computed reference |
 | CTL-3 | D on measurement | setpoint step produces no derivative spike |
 | CTL-4 | anti-windup | long saturation: integrator bounded, recovers within N ms after release |
-| CTL-5 | voltage normalisation | `V_bat` 6.5–8.4 V: duty scales exactly, clamps at ±0.95 |
+| CTL-5 | voltage normalisation | `V_bat` 9.0–12.6 V: duty scales exactly, clamps at ±0.95 |
 | CTL-6 | dead-zone comp | continuous through zero, no chatter at |u|<ε |
 | CTL-7 | limiters | rate limits, `θ_max`, `a_max`, headroom limiter obey bounds for random command sequences (property-based) |
 | CTL-8 | mixing | turn term reduced before balance term when voltage is limited |
@@ -143,7 +143,7 @@ encoder quantisation, PWM latency, and random seeds.
 | SIM-6 | parameter sweep ±30 % of m, l, I, M, Kt, R, friction | ≥ 95 % of 500 Monte-Carlo runs stable (robustness margin) |
 | SIM-7 | delay sweep 0–12 ms | stability boundary documented; nominal has ≥ 3 ms margin |
 | SIM-8 | sensor faults: gyro bias step, accel spike, stuck IMU | correct fault state or graceful recovery, never uncommanded motion |
-| SIM-9 | battery 8.4 → 6.6 V during run | no loss of stability, headroom limiter triggers |
+| SIM-9 | battery 12.6 → 9.0 V (3S 18650) during run | no loss of stability, headroom limiter triggers |
 | SIM-10 | slope ±8°, wheel slip | held or fails safe, documented limit |
 | SIM-11 | link loss during motion | stops commanding speed within 250 ms, remains balanced, lies down at 10 s |
 | SIM-12 | regression of gains | PR changing `params.yaml` or `core/` must keep SIM-1…11 green |
@@ -231,6 +231,7 @@ GamePup/N64 build does not gate the fast robot checks; they use path filters.
 | `zephyr-build` | ubuntu-24.04 | Zephyr SDK container, `west build -b <pocketbeagle_2 m4 target>` for release+debug, size report, fail if flash/RAM > 85 % | ~8 min |
 | `pru-build` | ubuntu-24.04 | TI `clpru` + PRU Software Support Package (cached download, version pinned and checksummed), build both firmwares, check `.map` memory use | ~3 min |
 | `dtbo` | ubuntu-24.04 | `dtc -@` robot overlay, `fdtoverlay` merge test against the PB2 base dtb for the pinned kernel (reuses `ci/target.env`) | ~1 min |
+| `hardware` | ubuntu-24.04 | KiCad container: `kicad-cli sch erc`, `pcb drc`, BOM/footprint check, pin-map consistency vs. DT overlay and firmware, Gerber/STEP artifacts (doc 9.6) | ~3 min |
 | `docs` | ubuntu-24.04 | markdown link check, spell check, diagram render | ~1 min |
 | `package` | needs: all | produce `dist/robot/` (m4.elf, pru0.out, pru1.out, dtbo, balbotd wheel, web bundle) and upload artifact + `SHA256SUMS` | ~2 min |
 

@@ -10,7 +10,7 @@ typical JGB37-520 listings; seller data varies, so **read your motor label and m
 
 | Item | Typical value | Consequence |
 |---|---|---|
-| Rated voltage | 12 V DC (runs 6–12 V) | 3S pack (11.1 V) gives full performance; 2S (7.4 V) gives ~60 % speed/torque |
+| Rated voltage | 12 V DC (runs 6–12 V) | **3S 18650 pack (9.0–12.6 V, 11.1 V nominal) selected**; 2S would give ~60 % speed/torque |
 | Gear ratio | 1:10 … 1:90 variants (e.g. 1:30 ≈ 330 rpm no-load at 12 V) | **Pick ratio first**: 1:20–1:30 suits a 65–80 mm wheel; ≥ 1:50 is too slow to recover from a push |
 | Encoder | Hall, 2 channels, **11 PPR per channel on the motor shaft** → 44 counts/rev at 4x | counts per wheel rev = `44 × ratio` (1:30 → 1320) |
 | Encoder power / levels | 3.3–5 V supply; outputs swing to the supply voltage | **power encoders from 3.3 V** → direct connection to PRU0 inputs, no level shifter |
@@ -44,7 +44,7 @@ Quantisation matters for the control rate: one count in a 2 ms (500 Hz) window i
 
 | Item | Value (verify datasheet) | Consequence |
 |---|---|---|
-| Motor supply VM | 4.5–13.5 V | 3S fully charged is 12.6 V: little margin. Fit a TVS and 470 µF+ close to the board, never hot-plug the battery, or use 2S |
+| Motor supply VM | 4.5–13.5 V | the 3S 18650 pack is 12.6 V fully charged: little margin. Fit a TVS and 470 µF+ close to the board, never hot-plug the battery, check spikes on a scope (doc 9.3), or use a 10 V motor rail / 2S |
 | Current per channel | **1.2 A continuous, 3.2 A peak** (short pulses) | below JGB37-520 stall current; see mitigations |
 | Logic | 2.7–5.5 V, so **3.3 V from PRU1 pins directly** | no level shifter |
 | PWM | up to 100 kHz | we use 20 kHz |
@@ -90,22 +90,32 @@ workable for a light (≤ 1.2 kg) robot. Budget for a heat sink and airflow.
 
 ## 8.4 720p USB camera
 
-Assumed: UVC device offering MJPEG at 1280x720 (30 fps) and typically YUYV only at lower
-frame rates because of USB 2.0 bandwidth. Check with `v4l2-ctl --list-formats-ext`; the plan
-adapts to the camera's actual modes.
+Verified on your board with `v4l2-ctl --list-formats-ext`:
 
-| Profile | Mode | USB / Wi-Fi bitrate (typical MJPEG) | Use |
+| Format | Modes |
+|---|---|
+| **MJPG** (compressed) | 1280x720 @ 30, 1920x1080 @ 30, 640x480 @ 30 |
+| YUYV (raw) | 1280x720 @ 10, 1920x1080 @ 5, 640x480 @ 30 |
+
+Consequences: always use **MJPG**. The camera has no 640x360 mode and no H.264, and MJPG
+offers 30 fps only, so lower frame rates are produced by dropping frames in the server (this
+saves network bandwidth, not USB bandwidth).
+
+| Profile | Mode | Typical bitrate (MJPEG) | Use |
 |---|---|---|---|
-| HQ | 1280x720 @ 30 MJPEG | ~10–25 Mbit/s | 5 GHz LAN/AP, one client |
-| Normal | 1280x720 @ 15 MJPEG or 960x540 @ 30 | ~5–12 Mbit/s | default |
-| Low | 640x360 or 640x480 @ 30, then 15 | ~2–6 Mbit/s | weak WiFi, WebRTC |
+| FHD (optional) | 1920x1080 @ 30 MJPG | ~20–40 Mbit/s | recording/inspection only; heavy for WiFi and phone decode |
+| **HQ (default V1)** | 1280x720 @ 30 MJPG | ~10–25 Mbit/s | 5 GHz LAN/AP, one client |
+| Normal | 1280x720 MJPG, 15 fps sent | ~5–12 Mbit/s | several clients / moderate WiFi |
+| Low | 640x480 @ 30 MJPG | ~3–8 Mbit/s | weak WiFi |
+| Low-15 | 640x480 MJPG, 15 fps sent | ~2–4 Mbit/s | very weak WiFi, WebRTC source |
 
-- **V1 (MJPEG passthrough)** works unchanged at 720p: no decode, A53 only forwards frames.
-- **WebRTC V2b with software x264 cannot use 720p** on the A53s with headroom for WiFi and USB.
-  Switch the camera to its native 640x360/640x480 MJPEG mode (so only a cheap JPEG decode is
-  needed), then x264 `ultrafast zerolatency` at ~1 Mbit/s. A 720p H.264 stream requires an
-  H.264-capable camera, which a plain 720p MJPEG webcam is not.
+- **V1 (MJPEG passthrough)** needs no decode on the A53: it forwards the camera's JPEG frames.
+- **WebRTC V2b with software x264 cannot use 720p** on the two A53s with headroom for WiFi and USB.
+  Use the camera's 640x480 MJPG mode (cheap JPEG decode with libjpeg-turbo), then x264
+  `ultrafast zerolatency` at ~1 Mbit/s. This is 4:3, while 720p is 16:9, so the UI must handle
+  both aspect ratios. H.264 passthrough is **not available** with this camera.
 - Camera mounting: rigid and low-vibration; rolling-shutter jelly shows up when the robot
-  wobbles. Tilt the field of view for forward driving. Camera current ~200–300 mA at 5 V.
-- Latency target: V-1 (< 250 ms median) is judged at the *Normal* profile first; the HQ profile has
+  wobbles. Camera current ~200–300 mA at 5 V. Auto-exposure may reduce the frame rate in dim light
+  (set exposure mode and `exposure_dynamic_framerate=0`).
+- Latency target: V-1 (< 250 ms median) is judged at the *Normal* profile first; HQ has
   more USB and network buffering, so confirm it separately.

@@ -13,6 +13,7 @@ robot/
     systemd/       balbot-*.service
     overlays/      robot pinmux + remoteproc/PRU carveout overlay (.dts, same style as overlays/)
     video/         go2rtc config, camera setup
+  hardware/        KiCad project (baseboard), pinmap.yaml, BOM, fab outputs (doc 9)
   web/             Vite + TypeScript UI
   app/             React Native app (Expo dev build)
   shared/          TS protocol package + golden vectors (JSON) used by C/Py/TS tests
@@ -63,11 +64,11 @@ Linux/apps).
 | Motors | **2 × JGB37-520 12 V gearmotor with Hall quadrature encoder (selected)**, ratio 1:20–1:30 recommended | 11 PPR/channel motor-side; encoders powered from 3.3 V (doc 8.1) |
 | Motor driver | **TB6612FNG dual driver (selected)**; paralleled channels or DRV8874-class as upgrade | 1.2 A continuous per channel, VM ≤ 13.5 V, STBY wired to E-stop (doc 8.2) |
 | Wheels | 65–80 mm rubber | grip matters |
-| Battery | 3S Li-ion/LiPo 11.1 V (or 2S 7.4 V with lower speed) with BMS and fuse | low-voltage cutoff in firmware |
+| Battery | **3S1P 18650 Li-ion pack (selected), 9.0–12.6 V, 3S BMS 10–20 A, fuse** | firmware lie-down at 3.3 V/cell (9.9 V), details in doc 9 |
 | Power | 5 V ≥ 3 A buck, separate from motor path, bulk caps | Pi-style supply noise isolation; common ground star |
 | Power monitor | INA226 on battery rail | I2C |
 | USB | small USB 2.0 hub (+ OTG adapter) | check PB2 host port current |
-| Camera | **720p UVC USB camera (selected)** | MJPEG passthrough V1; 640x360 mode for WebRTC (doc 8.4) |
+| Camera | **UVC USB camera (selected): MJPG 720p/1080p/640x480 @30** | MJPEG passthrough V1; 640x480 for WebRTC (doc 8.4) |
 | WiFi+BT | MT7921AU-class dongle | in-kernel drivers; 5 GHz |
 | Safety | arming switch, E-stop button wired to driver enable and M4F GPIO | hardware path |
 | Chassis | 3D printed or laser-cut, battery low, skids/bumpers front and rear | for safe falls |
@@ -106,9 +107,9 @@ Linux/apps).
 
 | ID | Question | Default if unanswered |
 |---|---|---|
-| Q1 | Motors/driver/camera decided: JGB37-520, TB6612, 720p USB camera. Still open: gear ratio, wheel diameter, battery (2S/3S) | 1:30, 65 mm wheels, 3S with TVS |
+| Q1 | Decided: JGB37-520 1:30, TB6612, 3S 18650, UVC camera. Still open: wheel diameter and chassis dimensions | 65 mm wheels |
 | Q2 | Is the GamePup cape staying on the robot (display, buzzer) or is it a clean build? | keep only ILI9341 + optional OLED |
-| Q3 | Does the 720p camera expose 640x360/640x480 MJPEG and what frame rates (`v4l2-ctl --list-formats-ext`)? Is it MJPEG-only? | MJPEG V1; WebRTC via 640x360 + x264 |
+| Q3 | Answered: MJPG 720p/1080p/640x480 @30, YUYV slower, no H.264 | MJPEG V1; WebRTC via 640x480 + x264 |
 | Q4 | Transport security: plain HTTP on private AP/LAN or self-signed TLS? | TLS with certificate fingerprint pinned in the app; plain HTTP only in dev builds |
 | Q5 | Is a self-righting/stand-up from lying position required? | out of scope for v1 (operator lifts) |
 | Q6 | Signed OTA required? | yes for M12; signing key outside the repo |
