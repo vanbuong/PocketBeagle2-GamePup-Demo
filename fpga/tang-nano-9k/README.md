@@ -143,6 +143,22 @@ If the picture is wrong: first check that the screen is black after reset (clear
 works), then that rows from `fbi`/the console appear (writes), then banding or
 shifted pixels (word/byte order or `ADDR_SHIFT`).
 
+## Building in the Gowin EDA IDE
+
+Use the latest commit (the first skeleton had a wrong PLL setting that Gowin reports as
+"Invalid VCO frequency"). New project: device **GW1NR-LV9QN88PC6/I5** (GW1NR-9C), then
+
+| build | RTL files to add | top module |
+|---|---|---|
+| 8 colours (BSRAM) | `rtl/lcd_timing.v test_pattern.v pll_pix.v spi_slave.v dbi_decoder.v framestore_bsram.v lcd_scanout.v small_lcd_bridge.v top.v top_bsram.v` | `top_bsram` |
+| full colour (PSRAM) | the files above **plus** `rtl/async_fifo.v psram_ctrl.v pll_mem.v framestore_psram.v top_psram.v` and the generated PSRAM IP (`ip/psram/README.md`) | `top_psram` |
+
+Constraints: `constraints/tangnano9k_lcd.cst` and `constraints/tangnano9k.sdc`. In the project's
+Process > Configuration, enable "Use SSPI/MSPI/DONE/READY/CPU as regular IO" (what `build.tcl`
+sets), or `gw_sh build.tcl` does all of this from the command line. Expect these harmless
+messages: "module test_pattern ... is swept" (the test pattern is only used when
+`SHOW_PATTERN=1`).
+
 ## CI and the open-source flow
 
 `.github/workflows/fpga.yml` runs on every change under `fpga/`:

@@ -15,13 +15,17 @@ module test_pattern #(
 
 	wire border = (x == 0) || (x == W - 1) || (y == 0) || (y == H - 1);
 	wire xhair  = (x == W / 2) || (y == H / 2);
-	wire [3:0] bar = (x / BAR_W);
-	wire [4:0] ramp5 = (x * 32) / W;
-	wire [5:0] ramp6 = (x * 64) / W;
+	// Full-width intermediates, then explicit slices (no implicit truncation warnings).
+	wire [31:0] bar_full   = x / BAR_W;
+	wire [31:0] ramp5_full = (x * 32) / W;
+	wire [31:0] ramp6_full = (x * 64) / W;
+	wire [2:0]  bar   = bar_full[2:0];
+	wire [4:0]  ramp5 = ramp5_full[4:0];
+	wire [5:0]  ramp6 = ramp6_full[5:0];
 
 	reg [15:0] bar_c;
 	always @* begin
-		case (bar[2:0])
+		case (bar)
 			3'd0: bar_c = 16'hFFFF; // white
 			3'd1: bar_c = 16'hFFE0; // yellow
 			3'd2: bar_c = 16'h07FF; // cyan
