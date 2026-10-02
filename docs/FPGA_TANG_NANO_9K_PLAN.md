@@ -91,7 +91,7 @@ Switching = run `gamepup-display` and reboot.
 2. PSRAM controller (Gowin IP wrapper) + pattern write/readback; framebuffer
    scan-out through line buffer.
 3. SPI slave + ILI9341 decoder, simulated (Verilator/cocotb) against a captured
-   DRM init + frame stream. `tools/send_frame.py` (spidev) for bench tests.
+   DRM init + frame stream. (There is no standalone spidev sender yet; the first SPI test on hardware goes through the Linux overlay, see `docs/FPGA_BRINGUP.md`.)
 4. Overlay variant + firmware blob + `panel-mipi-dbi` module + install option.
 5. Userspace port to 480x272: `emulator/gamepup-menu`, `gamepup-hardware-test`,
    `gamepup-retro.c` and `gamepup-gpu-bench.c` hardcode 320x240 (`fb_width`,
