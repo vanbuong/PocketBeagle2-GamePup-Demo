@@ -60,14 +60,14 @@ Linux/apps).
 | Compute | PocketBeagle 2 | already available |
 | Display (status) | GamePup A4 cape's ILI9341 and/or SH1106 OLED | reuse from this repo |
 | IMU | MPU-6500 breakout with SPI broken out | alternative: ICM-42688 later |
-| Motors | 2 × 12 V DC gearmotor with Hall quadrature encoder (e.g. 37 mm, 150–330 rpm, ≥ 11 CPR motor-side) | torque and no-load speed drive max speed; encoder must be 3.3 V compatible or level-shifted |
-| Motor driver | dual H-bridge, ≥ 3 A continuous per channel, PWM up to 20 kHz (e.g. TB6612-class small, or DRV8874/VNH-based for stall margin) | PWM+DIR inputs, enable pin wired to E-stop |
+| Motors | **2 × JGB37-520 12 V gearmotor with Hall quadrature encoder (selected)**, ratio 1:20–1:30 recommended | 11 PPR/channel motor-side; encoders powered from 3.3 V (doc 8.1) |
+| Motor driver | **TB6612FNG dual driver (selected)**; paralleled channels or DRV8874-class as upgrade | 1.2 A continuous per channel, VM ≤ 13.5 V, STBY wired to E-stop (doc 8.2) |
 | Wheels | 65–80 mm rubber | grip matters |
 | Battery | 3S Li-ion/LiPo 11.1 V (or 2S 7.4 V with lower speed) with BMS and fuse | low-voltage cutoff in firmware |
 | Power | 5 V ≥ 3 A buck, separate from motor path, bulk caps | Pi-style supply noise isolation; common ground star |
 | Power monitor | INA226 on battery rail | I2C |
 | USB | small USB 2.0 hub (+ OTG adapter) | check PB2 host port current |
-| Camera | UVC MJPEG (and H.264 for V2) | fixed-focus, wide FOV |
+| Camera | **720p UVC USB camera (selected)** | MJPEG passthrough V1; 640x360 mode for WebRTC (doc 8.4) |
 | WiFi+BT | MT7921AU-class dongle | in-kernel drivers; 5 GHz |
 | Safety | arming switch, E-stop button wired to driver enable and M4F GPIO | hardware path |
 | Chassis | 3D printed or laser-cut, battery low, skids/bumpers front and rear | for safe falls |
@@ -88,6 +88,7 @@ Linux/apps).
 | R9 | WiFi latency/jitter makes driving poor | M | M | AP mode on 5 GHz, command timeout, lower video resolution |
 | R10 | RN WebRTC/BLE native build complexity | M | M | MJPEG-in-WebView as first mobile milestone; BLE for control only |
 | R11 | Safety: robot injures people/self | L | H | speed limits, hardware E-stop, bumpers, test rig, sim-verified failsafes; never test with unsecured wheels at speed |
+| R13 | TB6612 current/thermal limits vs. JGB37-520 stall current; 3S pack near the 13.5 V VM limit | M | M | firmware current estimate + stall detect, TVS + bulk cap, paralleled channels, 2S pack or driver upgrade (doc 8.2) |
 | R12 | Single-person maintenance of 4 codebases | M | M | shared protocol vectors, strong CI, monorepo, small interfaces |
 
 ## 7.5 Experiments to run early
@@ -105,9 +106,9 @@ Linux/apps).
 
 | ID | Question | Default if unanswered |
 |---|---|---|
-| Q1 | Exact motors/driver/battery already owned? | as in 7.3; revisit after M0 |
+| Q1 | Motors/driver/camera decided: JGB37-520, TB6612, 720p USB camera. Still open: gear ratio, wheel diameter, battery (2S/3S) | 1:30, 65 mm wheels, 3S with TVS |
 | Q2 | Is the GamePup cape staying on the robot (display, buzzer) or is it a clean build? | keep only ILI9341 + optional OLED |
-| Q3 | Camera model (MJPEG-only or H.264)? | MJPEG V1, test H.264 camera for V2 |
+| Q3 | Does the 720p camera expose 640x360/640x480 MJPEG and what frame rates (`v4l2-ctl --list-formats-ext`)? Is it MJPEG-only? | MJPEG V1; WebRTC via 640x360 + x264 |
 | Q4 | Transport security: plain HTTP on private AP/LAN or self-signed TLS? | TLS with certificate fingerprint pinned in the app; plain HTTP only in dev builds |
 | Q5 | Is a self-righting/stand-up from lying position required? | out of scope for v1 (operator lifts) |
 | Q6 | Signed OTA required? | yes for M12; signing key outside the repo |

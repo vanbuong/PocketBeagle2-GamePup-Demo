@@ -21,7 +21,9 @@ that also runs WiFi, USB and the web server. So the plan is:
 | V2b | WebRTC with software x264 from MJPEG source | same | 150–300 ms | 40–80 % of one core at 640x480@15 *(initial, to measure)* |
 | V3 | adaptive bitrate / resolution, snapshot endpoint, recording | all | — | — |
 
-Targets: 640x480 at 30 fps (V1/V2); 320x240 at 15 fps fallback when WiFi RSSI is poor.
+Targets: the selected 720p UVC camera (doc 8.4): 1280x720 MJPEG passthrough for V1, with
+640x360 / 640x480 profiles for WebRTC and for weak WiFi. 720p software x264 is not
+planned on the A53s.
 Glass-to-glass latency goal < 250 ms; hard ceiling for usable driving is ~400 ms.
 
 ## 2.3 Pipeline
@@ -109,4 +111,4 @@ CRC8, rate limiter, state machine for connect/reconnect) so both are tested by o
   message) allow measuring glass-to-glass latency in test (doc 6, test V-3).
 - Bandwidth adaptation (V3): the client reports RTT/decode drops over the WS; `balbotd`
   steps resolution/fps (v4l2 reconfigure, restarts the stream in < 1 s) among
-  640x480@30 → 480x360@20 → 320x240@15.
+  1280x720@30 → 1280x720@15 (or 960x540@30) → 640x360@30 → 640x360@15 (profiles in doc 8.4).

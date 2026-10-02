@@ -21,7 +21,7 @@
 | **A53 (2 cores)** | Debian 13 Linux | WiFi (STA/AP), BLE GATT peripheral, web/WebSocket server, video capture and serving, `balbotd` supervisor (command arbitration, rpmsg bridge, logging, config), remoteproc firmware loading, LCD/OLED UI (existing GamePup), OTA update | soft real-time; 50 Hz control commands, 10–100 Hz telemetry |
 | **M4F** | Zephyr RTOS | MPU6500 driver (SPI + DRDY IRQ), calibration, attitude estimation, balance cascade (angle/speed/yaw), safety state machine, battery monitor, fault latch, command timeout, rpmsg endpoint, heartbeat to PRU1 | IMU 1 kHz, control 500 Hz, speed loop 100 Hz, telemetry 100 Hz; jitter budget < 100 µs |
 | **PRU0** | bare-metal (clpru C/asm) | Quadrature decode of 2 wheel encoders (4x), per-wheel signed count and edge timestamp, direction-error counter | polls every ~30 ns; publishes counts continuously |
-| **PRU1** | bare-metal | 20 kHz PWM and direction outputs for 2 motor drivers, dead-time / brake logic, duty slew limit, **hardware failsafe: brake if the M4F heartbeat is stale > 10 ms** | one 50 µs period; duty latched at period start |
+| **PRU1** | bare-metal | 20 kHz PWM plus IN1/IN2 direction outputs for the two TB6612 channels (doc 8), brake logic, duty slew limit, **hardware failsafe: brake if the M4F heartbeat is stale > 10 ms** | one 50 µs period; duty latched at period start |
 
 ### Why each assignment
 
@@ -250,8 +250,9 @@ optionally the OLED on I2C2. This leaves the remaining header pins free for the 
 |---|---|---|---|
 | IMU SPI SCLK/MOSI/MISO/CS | 4 | M4F | an MCU-domain SPI (MCU_SPI0/1) if routed to the headers, otherwise main-domain SPI assigned to M4F |
 | IMU INT | 1 | M4F | GPIO with interrupt capability reachable by M4F (MCU GPIO preferred) |
-| Encoder L A/B, R A/B | 4 | PRU0 | pins muxable to PRU0 R31 inputs (3.3 V; level-shift if encoders run at 5 V) |
-| Motor L PWM, DIR(/IN2), R PWM, DIR(/IN2) | 4 | PRU1 | pins muxable to PRU1 R30 outputs |
+| Encoder L A/B, R A/B | 4 | PRU0 | pins muxable to PRU0 R31 inputs; JGB37-520 encoders powered from 3.3 V so no level shifting (doc 8) |
+| Motor L PWM/IN1/IN2, R PWM/IN1/IN2 | 6 | PRU1 | TB6612 inputs; pins muxable to PRU1 R30 outputs |
+| TB6612 STBY | 1 | E-stop switch + pull-down, M4F GPIO read-back | see doc 8.2 |
 | Driver enable / STBY | 1 | hardware E-stop path | wired through E-stop and a GPIO |
 | E-stop / arm button | 1 | M4F GPIO | input with pull-up |
 | Battery sense | I2C (INA226) or 1 ADC | M4F | I2C addresses must not collide with I2C2 devices if shared |

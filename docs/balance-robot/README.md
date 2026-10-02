@@ -14,6 +14,7 @@ starting value to be replaced by measurement.
 | 5 | [Balance control](05-balance-control.md) | Plant model, PID cascade, LQR option, state machine, motion control, tuning |
 | 6 | [Test plan and CI](06-test-plan-ci.md) | Unit/sim/HIL tests, coverage targets, GitHub Actions design |
 | 7 | [Development plan](07-development-plan.md) | Milestones, repo layout, BOM, risks, open questions |
+| 8 | [Selected hardware](08-selected-hardware.md) | JGB37-520 + encoders, TB6612, 720p camera: limits and consequences |
 
 ## Goals
 

@@ -72,6 +72,8 @@ costs minutes to hours; on the host costs seconds.
 | EST-6 | numeric health | 10⁷ samples random input: no NaN/Inf, `P` positive definite |
 | EST-7 | C vs. Python reference | agree within 1e-4 rad on all golden vectors (4.10) |
 | EST-8 | quaternion norm | |q| = 1 ± 1e-6 after 10⁶ steps |
+| EST-9 | speed estimator, fixed window | constant-speed count streams (1:30, 0.155 mm/count) at 0.02–1.1 m/s → error < 1 quantum |
+| EST-10 | speed estimator, M/T | below 0.15 m/s error < 2 % and no 100 Hz staircase; counter wrap and direction reversal handled |
 
 ### Controller (`UT-CTL`)
 
@@ -189,6 +191,7 @@ supply or fused battery)
 | R-7 | low battery | cutoff and lay-down behaviour, no brown-out reset of the board |
 | R-8 | thermal | 30 min run: motor driver < 70 °C, SoC < 80 °C with video streaming |
 | R-9 | video + WiFi load while balancing | no change in IMU loop jitter vs. idle (HIL-2 metric) |
+| R-11 | TB6612 thermal/current | 30 min mixed pushes: driver < 70 °C, no thermal-shutdown, estimated vs. INA226 current within 25 %, stall detect trips in < 300 ms when a wheel is blocked |
 | R-10 | tip/fall | fall from balance: motors brake, sensors/board undamaged, FALLEN latched |
 
 ## 6.6 Non-functional tests

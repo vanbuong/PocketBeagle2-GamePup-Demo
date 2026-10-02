@@ -48,7 +48,7 @@ inductance optional), parameterised from a YAML file with the measured robot val
 |---|---|
 | `m`, `M` | scale |
 | `l`, `I` | hang the body from the axle and measure the swing period `T`: `I_pivot = m g l T²/(4π²)` (small angle); `I = I_pivot − m l²` |
-| `Kt`, `Ke`, `R` | motor datasheet then verified: `R` from stall current at low voltage, `Ke` from no-load speed at known V (`Ke = (V − I R)/ω`), `Kt = Ke` |
+| `Kt`, `Ke`, `R` | JGB37-520 label/listing values then verified (add the TB6612 ≈ 0.5 Ω to `R`): `R` from stall current at low voltage, `Ke` from no-load speed at known V (`Ke = (V − I R)/ω`), `Kt = Ke` |
 | friction / dead-zone | duty at which the wheel just starts to turn (each direction) |
 | encoder CPR | count over exactly N wheel turns |
 | delay | step response of the IMU→PWM chain measured on a scope with the PRU toggling a debug pin |
@@ -182,7 +182,8 @@ balance loop at ~±3°) is a stretch goal.
   raised arbitrarily*. Reducing the DLPF to 250 Hz/8 kHz sampling mode and averaging in
   firmware is an experiment (E2) if needed.
 - PWM at 20 kHz (above audible), slew limit on duty prevents shoot-through / current spikes.
-- Motor current limit: sense (INA226 on the motor rail or driver CS pin); fault when
+- Motor current limit: TB6612 has no current sense and is rated 1.2 A continuous, so use the
+  firmware current estimate, stall detection and battery-rail INA226 of doc 8.2; fault when
   stalled above limit > 200 ms.
 
 ## 5.9 Tuning procedure (robot on the ground, hand-supported, tether, wheels free first)
