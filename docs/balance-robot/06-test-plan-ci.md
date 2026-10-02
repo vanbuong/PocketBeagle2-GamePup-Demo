@@ -211,6 +211,14 @@ supply or fused battery)
 | N-7 | resilience | 24 h idle, 1 h soak balancing | no leaks (RSS stable), no faults, no reboots |
 | N-8 | EMC/EMI | motor noise coupling into IMU/SPI | IMU noise RMS with motors at 50 % duty within 20 % of idle |
 
+## 6.6b Status of the implementation (authoring branch)
+
+Implemented and passing locally: `robot/core` (10 C test programs, ASan/UBSan, line coverage 97 %), `robot/sim`
+(16 closed-loop tests), `robot/hardware` (18 tests). Workflows `robot-ci.yml` and `robot-hardware.yml` exist but have not
+run on GitHub yet. Of the catalogue below, the unit tests for CRC, protocol (incl. fuzz-lite), IMU conversion/health/dt,
+gyro calibration, estimators, speed estimation, PID, controller and state machine exist, as do SIM-1/2/4/5/6/7/8/9 in
+simplified form. Not implemented: 6-position calibration, Mahony filter, LQR code, HIL, server and app tests.
+
 ## 6.7 CI design
 
 Existing workflow: `.github/workflows/cross-compile.yml` (cross-builds the GamePup stack on

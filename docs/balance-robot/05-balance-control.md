@@ -207,10 +207,22 @@ pitch sign), `θ_trim` approx., battery ≥ 80 %.
 7. Record gains in `config/robot-<name>.yaml`; the tuning page writes them and `CFG_SAVE`
    persists them. Keep a "known-good" slot.
 
-Typical starting values (formulated for a 0.8–1.2 kg, 25–30 cm robot with 65 mm wheels and
-330 rpm 12 V gearmotors, to be recomputed from the model): `Kp ≈ 20–35 V/rad`, `Kd ≈ 0.8–2 V·s/rad`,
-`Ki ≈ 0–2 V/(rad·s)`, `Kvp ≈ 0.1–0.2 rad/(m/s)`, `Kvi ≈ 0.02–0.05`, `Kyp ≈ 0.5–1 V·s/rad`.
-*(These are order-of-magnitude folklore and unverified for this build.)*
+Starting values: the earlier folklore ranges (Kp 20-35, Kd 0.8-2, Kvp 0.1-0.2) were **wrong for this drivetrain** and
+are withdrawn. A 30:1 gearmotor reflects its rotor inertia to the wheel (`J_r N^2`), which makes the equivalent wheel mass
+~5 kg for the example robot (0.9 kg body), so the loop needs much stronger velocity feedback. The simulation in
+`robot/sim` (doc 5.12) uses LQR-derived values for the example model:
+
+| Gain | Value | Meaning |
+|---|---|---|
+| `Kp` | 60 V/rad | angle |
+| `Kd` | 7.5 V s/rad | pitch rate (gyro) |
+| `Kvp` | 0.35 rad/(m/s) | speed -> lean; times `Kp` this is 21 V per m/s of velocity feedback |
+| `Kvi` | 0.017 rad/m | position-like term, times `Kp` about 1 V/m |
+| `kv_ff` | 10.2 V/(m/s) | back-EMF feedforward, `Ke / r` |
+| `Kyp`, `Kyi` | 1.0, 2.0 | yaw loop (still to be tuned in sim) |
+
+These come from the assumed parameters in `sim/plant.py` (`R` = 5.5 ohm, `J_r` = 3e-6 kg m^2, ...) and **must be recomputed
+from the measured parameters of the real robot** before the first balance attempt.
 
 ## 5.10 LQR alternative (milestone M5)
 
@@ -238,3 +250,28 @@ avoid `atan2f`/`sinf` per sample where possible (a 3-term polynomial for small a
 used for `atan2` in the fast path and checked against libm in unit tests with 0.05° error
 tolerance). Constants live in a single `params.h` generated from YAML so tuning cannot
 silently drift between C, Python and docs.
+
+## 5.12 First simulation results (robot/sim, C controller in the loop)
+
+What was run: the real `core` code (IMU conversion, complementary filter, speed estimator, controller) against a nonlinear
+plant with IMU noise (0.0024 rad/s gyro, 4.4 mg accel), 0.02 rad/s gyro bias (10 % residual after calibration), int16
+quantisation, 1320 counts/rev encoders, one control period of actuation delay and an accelerometer mounted 5 cm above the axle.
+All 16 tests in `sim/test_sim.py` pass (recovery from +-5 and 10 deg, pushes up to 0.8 m/s, speed and yaw steps,
+battery 12.6 -> 9.0 V, 6 ms extra delay, stiction, 12-sample Monte-Carlo with +-25 % mass/length/inertia and motor
+parameters). A 1.2 m/s push falls (voltage headroom), which the tests record as the limit. Sign flips and a low `Kp` fail
+as they should.
+
+Findings that changed the design:
+
+1. **Velocity feedback must be strong** (above) and the cascade is equivalent to LQR state feedback, so the gains can be
+   computed (`robot/sim/lqr_design.py`) instead of tuned by feel.
+2. **Back-EMF feedforward is required.** Without `kv_ff` a 0.6 m/s step overshoots by 40-50 %; with `kv_ff = Ke/r` the
+   remaining overshoot is limited by the estimator.
+3. **Accelerometer leakage into the pitch estimate** is the dominant error while accelerating: with `tau` = 1 s the pitch
+   estimate was off by 3.2 deg (about 3 V of wrong command), with `tau` = 4 s and the accel gate at 0.03 g 0.75 deg. A
+   larger `tau` needs a well calibrated gyro bias (doc 4, 4.6), so bias tracking becomes important.
+4. The Kalman filter variant tried (`bb_kf`, un-tuned noise values) fell in the same test and is **not** ready; the
+   complementary filter is the baseline.
+
+Limits of this evidence: the plant parameters are assumptions; no hardware, no measured delay, no motor current limit and
+no TB6612 behaviour are modelled.

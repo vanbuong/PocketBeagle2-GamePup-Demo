@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-only
+cmake_minimum_required(VERSION 3.16)
+project(balbot_core C)
+
+option(COVERAGE "Build with gcov instrumentation" OFF)
+option(SANITIZE "Build tests with ASan + UBSan" OFF)
+option(BUILD_SHARED "Also build libbalbot.so for the Python simulator" OFF)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(WARN -Wall -Wextra -Werror -Wshadow -Wconversion -Wno-sign-conversion -Wdouble-promotion)
+
+set(SRCS src/crc.c src/proto.c src/imu.c src/estimator.c src/speed.c src/pid.c src/balance.c src/state.c)
+
+add_library(balbot_core STATIC ${SRCS})
+target_include_directories(balbot_core PUBLIC include)
+target_compile_options(balbot_core PRIVATE ${WARN})
+target_link_libraries(balbot_core PUBLIC m)
+set_target_properties(balbot_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(BUILD_SHARED)
+  add_library(balbot SHARED ${SRCS} ${CMAKE_CURRENT_SOURCE_DIR}/../sim/bridge.c)
+  target_include_directories(balbot PUBLIC include)
+  target_compile_options(balbot PRIVATE ${WARN})
+  target_link_libraries(balbot PUBLIC m)
+endif()
+
+if(COVERAGE)
+  target_compile_options(balbot_core PRIVATE --coverage -O0 -g)
+  target_link_options(balbot_core PUBLIC --coverage)
+endif()
+if(SANITIZE)
+  target_compile_options(balbot_core PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_link_options(balbot_core PUBLIC -fsanitize=address,undefined)
+endif()
+
+enable_testing()
+foreach(t crc proto imu cal estimator speed pid ctrl state mailbox)
+  add_executable(test_${t} tests/test_${t}.c)
+  target_link_libraries(test_${t} PRIVATE balbot_core)
+  target_compile_options(test_${t} PRIVATE -Wall -Wextra -Werror -Wno-sign-conversion)
+  if(SANITIZE)
+    target_compile_options(test_${t} PRIVATE -fsanitize=address,undefined)
+  endif()
+  add_test(NAME ${t} COMMAND test_${t})
+endforeach()

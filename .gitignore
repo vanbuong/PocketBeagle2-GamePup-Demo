@@ -43,3 +43,7 @@ robot/hardware/**/*.kicad_prl
 robot/hardware/**/fp-info-cache
 __pycache__/
 .pytest_cache/
+build*/
+robot/core/build-shared/
+*.gcda
+*.gcno
