@@ -291,6 +291,9 @@ static void activate(ui_page_t *p)
 	lv_indev_set_group(hal_keypad(), p->group);
 	if (p->on_show)
 		p->on_show(p);
+	/* Keys only reach the focused object: never leave a page without one, or B/X do nothing. */
+	if (lv_group_get_obj_count(p->group) == 0)
+		ui_page_add_sink(p);
 	ui_status_refresh();
 }
 

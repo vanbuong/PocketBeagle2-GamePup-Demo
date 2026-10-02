@@ -900,6 +900,24 @@ static void browser_load(browser_t *b, const char *dir_in)
 	char label[600];
 
 	if (!d) {
+		if (!b->cwd[0]) {
+			/* First load failed: show why instead of an empty, key-less page. */
+			lv_obj_t *card;
+			char msg[1200];
+
+			lv_group_remove_all_objs(b->page->group);
+			lv_obj_clean(b->page->content);
+			card = ui_card(b->page->content);
+			ui_label(card, LV_SYMBOL_WARNING "  Music folder unavailable", FONT_M, C_RED);
+			snprintf(msg, sizeof(msg), "Cannot open %s\nCreate it and copy music in, e.g.\nsudo mkdir -p %s\nsudo chown -R $USER %s",
+				 dir, dir, dir);
+			lv_obj_t *l = ui_label(card, msg, FONT_S, C_TEXT_DIM);
+
+			lv_obj_set_width(l, LV_PCT(100));
+			lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+			ui_page_add_sink(b->page);
+			return;
+		}
 		ui_toast("Cannot open folder");
 		return;
 	}
@@ -1000,7 +1018,7 @@ static bool browser_key(ui_page_t *page, uint32_t key)
 {
 	browser_t *b = page->user;
 
-	if (key == LV_KEY_ESC && strcmp(b->cwd, b->root)) {
+	if (key == LV_KEY_ESC && b->cwd[0] && strcmp(b->cwd, b->root)) {
 		char target[1100], *slash;
 
 		snprintf(target, sizeof(target), "%s", b->cwd);
