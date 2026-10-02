@@ -13,7 +13,7 @@ robot/
     systemd/       balbot-*.service
     overlays/      robot pinmux + remoteproc/PRU carveout overlay (.dts, same style as overlays/)
     video/         go2rtc config, camera setup
-  hardware/        KiCad project (baseboard), pinmap.yaml, BOM, fab outputs (doc 9)
+  hardware/        KiCad project: rev0/ (exists), baseboard Rev A (later), pinmap.yaml, BOM (doc 9, robot/hardware/README.md)
   web/             Vite + TypeScript UI
   app/             React Native app (Expo dev build)
   shared/          TS protocol package + golden vectors (JSON) used by C/Py/TS tests
@@ -35,7 +35,7 @@ has an exit criterion that is a test, not a feeling.
 
 | M | Title | Work | Exit criterion | Wk |
 |---|---|---|---|---|
-| M0 | Hardware bring-up and pin map | order parts; confirm PB2 header pins for PRU0/PRU1/MCU SPI/GPIO; USB hub + WiFi/BT dongle + camera enumerate on kernel 6.18-k3; `requirements.md`; repo skeleton + CI skeleton | pin table verified with scope; `lsusb`, `iw`, `bluetoothctl`, `v4l2-ctl` work; CI green on empty tests | 2 |
+| M0 | Hardware bring-up and pin map | order parts; build Rev 0 from `robot/hardware/rev0` and fill `pinmap.yaml` (`tbd` -> `verified`); confirm PB2 header pins for PRU0/PRU1/MCU SPI/GPIO; USB hub + WiFi/BT dongle + camera enumerate on kernel 6.18-k3; `requirements.md`; repo skeleton + CI skeleton | pin table verified with scope; `lsusb`, `iw`, `bluetoothctl`, `v4l2-ctl` work; CI green on empty tests | 2 |
 | M1 | Toolchains and "hello" on every core | Zephyr SDK/west; blink + shell on M4F via remoteproc; PRU toggles a pin; rpmsg echo A53⇄M4F; M4F⇄PRU mailbox read/write | echo round-trip stats; M4F reads PRU counter; documented boot scripts | 2 |
 | M2 | MPU6500 driver + calibration | SPI driver on M4F, DRDY ISR, health checks, unit tests with mock, gyro bias calibration, blackbox ring | HIL-BENCH static accuracy; IMU-1…8, CAL-1…5 pass; 1 kHz sampling jitter < 20 µs | 2 |
 | M3 | Estimator and offline sim | complementary + Kalman + Mahony in `core`; Python reference; golden vectors; tilt-table test; sim plant v1 | EST-1…8 pass; tilt table < 0.5° static | 2 |
@@ -89,7 +89,7 @@ Linux/apps).
 | R9 | WiFi latency/jitter makes driving poor | M | M | AP mode on 5 GHz, command timeout, lower video resolution |
 | R10 | RN WebRTC/BLE native build complexity | M | M | MJPEG-in-WebView as first mobile milestone; BLE for control only |
 | R11 | Safety: robot injures people/self | L | H | speed limits, hardware E-stop, bumpers, test rig, sim-verified failsafes; never test with unsecured wheels at speed |
-| R13 | TB6612 current/thermal limits vs. JGB37-520 stall current; 3S pack near the 13.5 V VM limit | M | M | firmware current estimate + stall detect, TVS + bulk cap, paralleled channels, 2S pack or driver upgrade (doc 8.2) |
+| R13 | TB6612 current/thermal limits (stall current unspecified, max load 1 A); 3S pack near the 13.5 V VM limit | L–M | M | firmware current estimate + stall detect, TVS + bulk cap, paralleled channels, 2S pack or driver upgrade (doc 8.2) |
 | R12 | Single-person maintenance of 4 codebases | M | M | shared protocol vectors, strong CI, monorepo, small interfaces |
 
 ## 7.5 Experiments to run early

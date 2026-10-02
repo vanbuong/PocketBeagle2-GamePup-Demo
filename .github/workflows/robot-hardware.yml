@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: GPL-2.0-only
+name: Robot hardware
+
+on:
+  push:
+    branches: [main, 'cursor/**', 'docs/**', 'robot/**']
+    paths: ['robot/hardware/**', '.github/workflows/robot-hardware.yml', 'overlays/**']
+  pull_request:
+    paths: ['robot/hardware/**', '.github/workflows/robot-hardware.yml', 'overlays/**']
+  workflow_dispatch:
+
+concurrency:
+  group: robot-hardware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hardware-tests:
+    name: Pin map, schematic, BOM, netlist
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: robot/hardware/requirements.txt
+      - name: Install KiCad (kicad-cli + stock symbol libraries) and Python deps
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends kicad kicad-symbols
+          pip install -r robot/hardware/requirements.txt
+      - name: Pin map rules
+        run: python3 robot/hardware/tools/check_pinmap.py
+      - name: Tests
+        run: python3 -m pytest -q robot/hardware/tests
+      - name: Export PDF and netlist
+        run: |
+          set -eux
+          make -C robot/hardware pdf netlist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robot-rev0-schematic
+          path: |
+            robot/hardware/rev0/balbot_rev0.pdf
+            robot/hardware/rev0/balbot_rev0.net
+            robot/hardware/rev0/BOM.csv
+          retention-days: 14
+
+  erc:
+    name: KiCad 8 ERC (advisory)
+    runs-on: ubuntu-24.04
+    continue-on-error: true   # untested on this schematic: promote to a required check once it is clean
+    container:
+      image: kicad/kicad:8.0
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+      - name: ERC
+        run: |
+          kicad-cli sch erc --severity-error --severity-warning --format report \
+            --output erc.rpt robot/hardware/rev0/balbot_rev0.kicad_sch || true
+          cat erc.rpt
+          kicad-cli sch erc --severity-error --exit-code-violations \
+            robot/hardware/rev0/balbot_rev0.kicad_sch
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: erc-report
+          path: erc.rpt

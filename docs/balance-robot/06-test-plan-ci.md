@@ -231,7 +231,7 @@ GamePup/N64 build does not gate the fast robot checks; they use path filters.
 | `zephyr-build` | ubuntu-24.04 | Zephyr SDK container, `west build -b <pocketbeagle_2 m4 target>` for release+debug, size report, fail if flash/RAM > 85 % | ~8 min |
 | `pru-build` | ubuntu-24.04 | TI `clpru` + PRU Software Support Package (cached download, version pinned and checksummed), build both firmwares, check `.map` memory use | ~3 min |
 | `dtbo` | ubuntu-24.04 | `dtc -@` robot overlay, `fdtoverlay` merge test against the PB2 base dtb for the pinned kernel (reuses `ci/target.env`) | ~1 min |
-| `hardware` | ubuntu-24.04 | KiCad container: `kicad-cli sch erc`, `pcb drc`, BOM/footprint check, pin-map consistency vs. DT overlay and firmware, Gerber/STEP artifacts (doc 9.6) | ~3 min |
+| `hardware` | ubuntu-24.04 | **implemented** as `.github/workflows/robot-hardware.yml`: pin-map rules, schematic/BOM reproducibility, netlist checks, PDF artifact; KiCad 8 ERC advisory. Rev A adds `pcb drc`, Gerber/STEP and pin-map vs. DT overlay/firmware checks (doc 9.6) | ~3 min |
 | `docs` | ubuntu-24.04 | markdown link check, spell check, diagram render | ~1 min |
 | `package` | needs: all | produce `dist/robot/` (m4.elf, pru0.out, pru1.out, dtbo, balbotd wheel, web bundle) and upload artifact + `SHA256SUMS` | ~2 min |
 

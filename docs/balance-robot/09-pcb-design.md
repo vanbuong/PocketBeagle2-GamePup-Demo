@@ -116,13 +116,20 @@ Rules:
 - **Fabrication files:** KiCad project in `robot/hardware/`; outputs Gerbers, drill, BOM (JLC/LCSC
   columns), pick-and-place; 3D STEP for the chassis designer.
 
-## 9.6 CI for hardware (added to doc 6)
+## 9.6 KiCad project and CI for hardware
 
-`hardware` job on every PR touching `robot/hardware/**`: `kicad-cli sch erc` (zero errors),
-`kicad-cli pcb drc` (zero errors, no unrouted nets), BOM export check (no missing footprints/MPNs),
-Gerber/drill/STEP generation, upload as artifact. A script compares the PB2 net-to-pin table
-(`robot/hardware/pinmap.yaml`) against the DT overlay and the firmware pin definitions so
-the three cannot drift apart.
+The Rev 0 project exists in [`robot/hardware/`](../../robot/hardware/README.md): a generated, KiCad 7 module
+interconnect schematic (`rev0/balbot_rev0.kicad_sch`), BOM, `pinmap.yaml` (all signals still `tbd`),
+`reserved_pins.yaml` (GamePup pins taken from the overlays) and pytest tests.
+Workflow `.github/workflows/robot-hardware.yml` runs on changes to `robot/hardware/**`:
+
+- `hardware-tests`: pin-map rules, schematic reproducibility (committed file equals generator output),
+  BOM consistency, netlist checks of the STBY gate, driver inputs, encoder paths and rails, and
+  a PDF/netlist artifact.
+- `erc`: KiCad 8 `kicad-cli sch erc`, **advisory** until it has run clean once (ERC was not available
+  in the KiCad 7 used for authoring).
+- Rev A adds `kicad-cli pcb drc` (zero errors, no unrouted nets), Gerber/drill/STEP generation, and a check
+  that `pinmap.yaml`, the DT overlay and the firmware pin definitions agree.
 
 ## 9.7 Design review checklist before ordering Rev A
 

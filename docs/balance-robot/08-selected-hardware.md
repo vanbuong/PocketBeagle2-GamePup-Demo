@@ -6,20 +6,45 @@ of the design. Datasheet figures below are from memory of the TB6612FNG datashee
 typical JGB37-520 listings; seller data varies, so **read your motor label and measure**
 (procedure in doc 5, 5.1).
 
-## 8.1 JGB37-520 gearmotor with encoder
+## 8.1 GB37-520 (JGB37-520) gearmotor with encoder: supplied specification
 
-| Item | Typical value | Consequence |
+| Item | Value (from your spec sheet) | Consequence |
 |---|---|---|
-| Rated voltage | 12 V DC (runs 6–12 V) | **3S 18650 pack (9.0–12.6 V, 11.1 V nominal) selected**; 2S would give ~60 % speed/torque |
-| Gear ratio | 1:10 … 1:90 variants (e.g. 1:30 ≈ 330 rpm no-load at 12 V) | **Pick ratio first**: 1:20–1:30 suits a 65–80 mm wheel; ≥ 1:50 is too slow to recover from a push |
-| Encoder | Hall, 2 channels, **11 PPR per channel on the motor shaft** → 44 counts/rev at 4x | counts per wheel rev = `44 × ratio` (1:30 → 1320) |
-| Encoder power / levels | 3.3–5 V supply; outputs swing to the supply voltage | **power encoders from 3.3 V** → direct connection to PRU0 inputs, no level shifter |
-| Stall current | often 3–6 A at 12 V (varies) | exceeds TB6612 limits, see 8.2 |
-| Wiring | 6 wires: M+, M−, GND, VCC(encoder), A, B | add 100 nF at encoder connector, twisted pair A/B, keep away from motor leads |
+| Type | GB37-520 DC geared motor, 37 mm, 6 mm shaft, gearbox length 22 mm | |
+| Voltage | 12 V DC | 3S 18650 (9.0–12.6 V) is the chosen supply |
+| Ratio | **30:1** | confirmed; recommended ratio from the earlier analysis |
+| No-load speed | **333 rpm** (34.9 rad/s) | wheel 65 mm: 1.13 m/s no-load |
+| Speed under load | up to 250 rpm | wheel 65 mm: ≈ 0.85 m/s; plan `v_max` ≈ 0.6 m/s |
+| No-load current | 120 mA | friction/dead-zone indicator; start voltage to be measured |
+| Max load current | **1 A** | within TB6612 1.2 A continuous per channel |
+| Rated torque | 3.5 kg·cm (0.34 N·m) | |
+| Max torque | 5 kg·cm (0.49 N·m) | |
+| Encoder | Hall, 2 channels A/B, 3.3–5 V | power from 3.3 V, direct to PRU0 pins |
+| Pulses | 11 per channel per motor-shaft rev (22 with both channels) → **330 per channel per output rev**, **1320 counts/rev at 4x decoding** | 0.155 mm per count with a 65 mm wheel |
+| Not given | **stall current, winding resistance, start voltage** | must be measured before using the model (doc 5.1) |
+
+### Model constants derived from the sheet (initial values; verify by measurement)
+
+The output-shaft back-EMF constant is `Ke ≈ (12 V − I₀·R) / ω₀`. With `I₀ = 0.12 A` and `R` of a few ohms the
+correction is ~0.3–0.5 V, so `Ke ≈ 0.33 V·s/rad` and, in SI units, `Kt ≈ Ke ≈ 0.33 N·m/A`. This agrees with the
+sheet: 1 A × 0.33 N·m/A ≈ 0.34 N·m = the rated 3.5 kg·cm. The sheet's 5 kg·cm max torque
+corresponds to ≈ 1.5 A, which suggests a winding resistance near 8 Ω (12 V / 1.5 A) *if* the
+"max load" numbers are the stall point. A seller's stall current is often higher; **measure R**
+(low-voltage stall test with a current-limited supply, wheel blocked, 1 s only) and put it in `config/robot-*.yaml`.
+Add the TB6612 on-resistance (~0.5 Ω) to `R`.
+
+### Sizing check (is the motor strong enough?)
+
+Take a 1.2 kg robot, 65 mm wheels. Two motors at the rated torque give 2 × 0.34 / 0.0325 ≈ 21 N of
+thrust. A 10° tilt recovery needs `m g tan 10° ≈ 2 N`, a 10° slope needs `m g sin 10° ≈ 2 N`, and
+the 0.8 m/s² acceleration limit needs ≈ 1 N. So torque and current are ample (< 0.2 A in
+normal balance); **the real limits are back-EMF voltage headroom at speed and the dead zone**
+(doc 5.6 headroom limiter). Motor torque does not restrict the design until the robot is
+heavier than ~3 kg.
 
 ### Encoder resolution and speed estimation
 
-Example 1:30, 65 mm wheel: 1320 counts/rev → **0.155 mm per count**.
+Confirmed 1:30, 65 mm wheel: 1320 counts/rev → **0.155 mm per count**.
 Max no-load wheel speed ≈ 330 rpm × π × 0.065 ≈ 1.1 m/s (≈ 1.0 m/s at 11.1 V), edge rate at
 that speed ≈ 7 kcounts/s per wheel (trivial for a PRU, still feasible on M4F GPIO IRQs).
 
@@ -45,7 +70,7 @@ Quantisation matters for the control rate: one count in a 2 ms (500 Hz) window i
 | Item | Value (verify datasheet) | Consequence |
 |---|---|---|
 | Motor supply VM | 4.5–13.5 V | the 3S 18650 pack is 12.6 V fully charged: little margin. Fit a TVS and 470 µF+ close to the board, never hot-plug the battery, check spikes on a scope (doc 9.3), or use a 10 V motor rail / 2S |
-| Current per channel | **1.2 A continuous, 3.2 A peak** (short pulses) | below JGB37-520 stall current; see mitigations |
+| Current per channel | **1.2 A continuous, 3.2 A peak** (short pulses) | above the motor's 1 A max load current; stall current unknown, see mitigations |
 | Logic | 2.7–5.5 V, so **3.3 V from PRU1 pins directly** | no level shifter |
 | PWM | up to 100 kHz | we use 20 kHz |
 | On-resistance | ~0.5 Ω (high+low) | adds to motor R in the model: `R_total = R_motor + R_on`; costs ~0.5 V of headroom at 1 A |
@@ -75,8 +100,9 @@ of logic power or an E-stop press puts the driver in standby (coast, safest for 
 5. **Upgrade path** if the robot is heavy or tests fail: DRV8874 / VNH-class drivers with current
    sense. The driver is isolated behind `motor_drv.h` in PRU1/M4F so swapping is a PRU1 pin mapping change.
 
-Because normal balancing needs only a few hundred mA and peaks occur on pushes, TB6612 is
-workable for a light (≤ 1.2 kg) robot. Budget for a heat sink and airflow.
+With the supplied spec (max load current 1 A per motor, normal balancing a few hundred mA) the TB6612 is
+adequate. The remaining exposure is an unspecified **stall current** (blocked wheel, fall onto the
+wheels), covered by the stall detect and current estimate above. Budget a heat sink and airflow.
 
 ## 8.3 Pin budget update (doc 1, 1.8)
 

@@ -1,0 +1,32 @@
+Qty,Value,Footprint,References
+1,470uF 25V low-ESR,Capacitor_THT:CP_Radial_D10.0mm_P5.00mm,C1
+3,100nF,Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm,C2 C3 C6
+4,1nF,Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm,C4 C5 C7 C8
+1,TVS >=13V stand-off,Diode_THT:D_DO-201AD_P15.24mm_Horizontal,D1
+1,5A blade,Fuse:Fuseholder_Blade_Mini_Keystone_3568,F1
+1,XT30 battery (from 3S BMS),Connector_AMASS:AMASS_XT30PW-M_1x02_P2.50mm_Horizontal,J1
+1,Main power switch (rocker),Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,J2
+1,5V buck module (>=4A),Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical,J3
+1,3V3 LDO module (sensors),Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical,J4
+1,To PB2 5V input (see PB2 manual),Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,J5
+1,To powered USB hub,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,J6
+1,TB6612 module logic side,Connector_PinHeader_2.54mm:PinHeader_1x09_P2.54mm_Vertical,J7
+1,TB6612 module power side,Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical,J8
+1,Motor L 6-pin (verify your harness order),Connector_JST:JST_PH_B6B-PH-K_1x06_P2.00mm_Vertical,J9
+1,Motor R 6-pin (verify your harness order),Connector_JST:JST_PH_B6B-PH-K_1x06_P2.00mm_Vertical,J10
+1,E-stop (NC contact),Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,J11
+1,ARM button (to GND),Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,J12
+1,MPU-6500 SPI module,Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical,J14
+1,INA260 / INA226 I2C,Connector_PinHeader_2.54mm:PinHeader_1x05_P2.54mm_Vertical,J15
+1,INA260 VIN+/VIN- (jumper if not fitted),Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,J16
+1,UART debug (3.3 V),Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical,J17
+1,Logical signals to PB2 headers,Connector_PinHeader_2.54mm:PinHeader_1x26_P2.54mm_Vertical,J18
+6,47R,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R1 R3 R5 R7 R9 R11
+7,10k,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R2 R4 R6 R8 R10 R12 R13
+2,100k,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R14 R15
+4,1k,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R16 R19 R22 R25
+4,4.7k DNP,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R17 R20 R23 R26
+4,0R,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R18 R21 R24 R27
+5,22R,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R28 R29 R30 R31 R32
+2,4.7k,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P7.62mm_Horizontal,R33 R34
+1,74LVC2G08,Package_SO:VSSOP-8_2.3x2mm_P0.5mm,U1

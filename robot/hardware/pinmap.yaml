@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Single source of truth: logical robot signal -> PocketBeagle 2 header pin.
+#
+# Status values:  tbd       not assigned yet (nothing has been checked)
+#                 candidate chosen on paper, not yet proven
+#                 verified  muxed in a device-tree overlay AND measured with a scope
+#
+# `owner` is the core that must be able to reach the pad:
+#   PRU0 / PRU1  pad must be mux-able to that PRU's R31 (input) / R30 (output)
+#   M4F          pad must be in (or reachable by) the M4F: MCU-domain GPIO/SPI/I2C/UART
+#   A53          Linux-owned peripheral or GPIO
+#
+# Milestone M0 (docs/balance-robot/07-development-plan.md) fills `header_pin`, `pad`, `mux`.
+# Rules enforced by tools/check_pinmap.py:
+#   * header_pin looks like P1.NN or P2.NN, NN = 01..36, and is unique
+#   * no pin used by the GamePup A4 overlays (reserved_pins.yaml) unless gamepup_conflict_ok: true
+#   * `verified` requires pad + mux to be filled in
+# The signal ORDER below must equal the pin order of connector J18 in the Rev 0 schematic.
+version: 1
+board: PocketBeagle 2
+signals:
+  - {name: ENC_L_A,     dir: in,  owner: PRU0, header_pin: null, pad: null, mux: null, status: tbd, note: "left encoder channel A, 3.3 V"}
+  - {name: ENC_L_B,     dir: in,  owner: PRU0, header_pin: null, pad: null, mux: null, status: tbd, note: "left encoder channel B"}
+  - {name: ENC_R_A,     dir: in,  owner: PRU0, header_pin: null, pad: null, mux: null, status: tbd, note: "right encoder channel A"}
+  - {name: ENC_R_B,     dir: in,  owner: PRU0, header_pin: null, pad: null, mux: null, status: tbd, note: "right encoder channel B"}
+  - {name: MOT_L_PWM,   dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "TB6612 PWMA, 20 kHz"}
+  - {name: MOT_L_IN1,   dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "TB6612 AIN1"}
+  - {name: MOT_L_IN2,   dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "TB6612 AIN2"}
+  - {name: MOT_R_PWM,   dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "TB6612 PWMB, 20 kHz"}
+  - {name: MOT_R_IN1,   dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "TB6612 BIN1"}
+  - {name: MOT_R_IN2,   dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "TB6612 BIN2"}
+  - {name: MOT_EN_PRU,  dir: out, owner: PRU1, header_pin: null, pad: null, mux: null, status: tbd, note: "STBY gate input: PRU1 enable (heartbeat watchdog)"}
+  - {name: MOT_EN_M4F,  dir: out, owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "STBY gate input: M4F enable"}
+  - {name: ESTOP_OK,    dir: in,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "E-stop loop sense, high = run"}
+  - {name: ARM_BTN,     dir: in,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "arm button, active low"}
+  - {name: IMU_SCLK,    dir: out, owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "MPU-6500 SPI clock"}
+  - {name: IMU_MOSI,    dir: out, owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "MPU-6500 SDI"}
+  - {name: IMU_MISO,    dir: in,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "MPU-6500 SDO"}
+  - {name: IMU_CS,      dir: out, owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "MPU-6500 NCS"}
+  - {name: IMU_INT,     dir: in,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "data-ready interrupt"}
+  - {name: I2C_SCL,     dir: io,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "INA260/INA226 bus (fallback: Linux I2C2, then rpmsg at 10 Hz)"}
+  - {name: I2C_SDA,     dir: io,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: ""}
+  - {name: INA_ALERT,   dir: in,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "over-current alert (optional)"}
+  - {name: UART_TX,     dir: out, owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "M4F console TX"}
+  - {name: UART_RX,     dir: in,  owner: M4F,  header_pin: null, pad: null, mux: null, status: tbd, note: "M4F console RX"}

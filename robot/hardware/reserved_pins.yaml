@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Header pins already claimed by the GamePup A4 overlays in this repository (overlays/*.dts).
+# tests/test_hardware.py checks that this list covers every Pn.NN mentioned in those overlays.
+# Power, ground and other fixed-function pins of the PB2 headers are NOT listed here yet:
+# add them from the PocketBeagle 2 reference manual during M0 (field `fixed`).
+gamepup:
+  - P1.02   # EC11 switch
+  - P1.04   # W5500 reset (spi2 overlay)
+  - P1.06   # SPI2 CS0
+  - P1.08   # SPI2 CLK
+  - P1.10   # SPI2 MISO
+  - P1.12   # SPI2 MOSI
+  - P1.19   # EC11 A
+  - P1.29   # right eye LED
+  - P1.31   # Select
+  - P1.33   # buzzer EHRPWM2_B
+  - P1.34   # EC11 B
+  - P1.35   # Start
+  - P1.36   # MAX98357 SD_MODE / base-tree epwm2
+  - P2.01   # LCD backlight ECAP2
+  - P2.02
+  - P2.03   # W5500 INT
+  - P2.04
+  - P2.05   # I2S DIN
+  - P2.06
+  - P2.07   # I2S mic SD
+  - P2.08
+  - P2.10   # I2S LRCLK
+  - P2.11   # I2S BCLK
+  - P2.17   # LCD D/C
+  - P2.18
+  - P2.19   # LCD reset
+  - P2.20
+  - P2.22
+  - P2.24
+  - P2.25   # SPI0 MOSI
+  - P2.27   # SPI0 MISO
+  - P2.29   # SPI0 CLK
+  - P2.31   # SPI0 CS0
+  - P2.34   # left eye LED
+fixed: []
