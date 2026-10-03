@@ -130,13 +130,13 @@ Frame format (little endian, 8-byte header, max payload 480 B):
 | A→M | `CMD_ARM` / `CMD_DISARM` | 0x02/0x03 | none (DISARM always honoured) |
 | A→M | `CMD_ESTOP` | 0x04 | none, latches `FAULT` |
 | A→M | `CMD_HEARTBEAT` | 0x05 | `u32 uptime_ms` |
-| A→M | `CFG_SET` / `CFG_GET` | 0x10/0x11 | `u16 key`, `f32 value` (gains, limits, trims) |
+| A→M | `CFG_SET` / `CFG_GET` | 0x10/0x11 | `CFG_SET`: `u16 key`, `f32 value` (gains, limits, trims); `CFG_GET`: `u16 key` |
 | A→M | `CFG_SAVE` | 0x12 | persist to settings (NVS/flash on SD via Linux file) |
 | A→M | `CAL_START` | 0x20 | `u8 kind` (gyro, accel-level, accel-6pos) |
 | M→A | `EVT_STATE` | 0x80 | state-machine state, fault bits |
 | M→A | `TLM_FAST` | 0x81 | `u32 t_us`, pitch, pitch rate, yaw rate, v, u_L, u_R, vbat (10 × i16/f32) |
 | M→A | `TLM_SLOW` | 0x82 | loop timing stats, temp, calibration state, counters |
-| M→A | `CFG_VAL` | 0x90 | reply to `CFG_GET` |
+| M→A | `CFG_VAL` | 0x90 | reply to `CFG_GET` and `CFG_SET`: `u16 key`, `f32 value`, `u8 status` (0 ok, 1 rejected, 2 unknown key, 3 out of range) |
 | M→A | `CAL_RESULT` | 0xA0 | bias / scale values |
 
 Latency of rpmsg from Linux user space is typically ~100 µs–1 ms with occasional spikes;

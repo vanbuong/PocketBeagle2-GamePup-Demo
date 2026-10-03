@@ -214,7 +214,7 @@ supply or fused battery)
 ## 6.6b Status of the implementation (authoring branch)
 
 Implemented and passing locally: `robot/core` (10 C test programs, ASan/UBSan, line coverage 97 %), `robot/sim`
-(16 closed-loop tests), `robot/hardware` (18 tests). Workflows `robot-ci.yml` and `robot-hardware.yml` exist but have not
+(17 closed-loop tests), `robot/hardware` (18 tests), `robot/linux/balbotd` (99 tests: lease, failsafe, limits, config round trips, lossy link, M4F death and reconnect, real-process end-to-end, Python-vs-C frame cross-check; 90 % line coverage). Workflows `robot-ci.yml` and `robot-hardware.yml` exist but have not
 run on GitHub yet. Of the catalogue below, the unit tests for CRC, protocol (incl. fuzz-lite), IMU conversion/health/dt,
 gyro calibration, estimators, speed estimation, PID, controller and state machine exist, as do SIM-1/2/4/5/6/7/8/9 in
 simplified form. Not implemented: 6-position calibration, Mahony filter, LQR code, HIL, server and app tests.

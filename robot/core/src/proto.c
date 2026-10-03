@@ -141,6 +141,111 @@ int bb_unpack_tlm_fast(const uint8_t *buf, size_t n, struct bb_tlm_fast *t)
 	return BB_OK;
 }
 
+static void putf(uint8_t *p, float f)
+{
+	uint32_t u;
+
+	memcpy(&u, &f, sizeof u);
+	put32(p, u);
+}
+
+static float getf(const uint8_t *p)
+{
+	uint32_t u = get32(p);
+	float f;
+
+	memcpy(&f, &u, sizeof f);
+	return f;
+}
+
+int bb_pack_cfg_set(uint8_t *buf, size_t cap, const struct bb_cfg_set *c)
+{
+	if (!buf || !c)
+		return BB_ERR_ARG;
+	if (cap < BB_CFG_SET_LEN)
+		return BB_ERR_CAP;
+	put16(buf, c->key);
+	putf(buf + 2, c->value);
+	return BB_CFG_SET_LEN;
+}
+
+int bb_unpack_cfg_set(const uint8_t *buf, size_t n, struct bb_cfg_set *c)
+{
+	if (!buf || !c)
+		return BB_ERR_ARG;
+	if (n != BB_CFG_SET_LEN)
+		return BB_ERR_LEN;
+	c->key = get16(buf);
+	c->value = getf(buf + 2);
+	return BB_OK;
+}
+
+int bb_pack_cfg_val(uint8_t *buf, size_t cap, const struct bb_cfg_val *c)
+{
+	if (!buf || !c)
+		return BB_ERR_ARG;
+	if (cap < BB_CFG_VAL_LEN)
+		return BB_ERR_CAP;
+	put16(buf, c->key);
+	putf(buf + 2, c->value);
+	buf[6] = c->status;
+	return BB_CFG_VAL_LEN;
+}
+
+int bb_unpack_cfg_val(const uint8_t *buf, size_t n, struct bb_cfg_val *c)
+{
+	if (!buf || !c)
+		return BB_ERR_ARG;
+	if (n != BB_CFG_VAL_LEN)
+		return BB_ERR_LEN;
+	c->key = get16(buf);
+	c->value = getf(buf + 2);
+	c->status = buf[6];
+	return BB_OK;
+}
+
+int bb_pack_evt_state(uint8_t *buf, size_t cap, const struct bb_evt_state *e)
+{
+	if (!buf || !e)
+		return BB_ERR_ARG;
+	if (cap < BB_EVT_STATE_LEN)
+		return BB_ERR_CAP;
+	buf[0] = e->state;
+	buf[1] = e->faults;
+	return BB_EVT_STATE_LEN;
+}
+
+int bb_unpack_evt_state(const uint8_t *buf, size_t n, struct bb_evt_state *e)
+{
+	if (!buf || !e)
+		return BB_ERR_ARG;
+	if (n != BB_EVT_STATE_LEN)
+		return BB_ERR_LEN;
+	e->state = buf[0];
+	e->faults = buf[1];
+	return BB_OK;
+}
+
+int bb_pack_heartbeat(uint8_t *buf, size_t cap, uint32_t uptime_ms)
+{
+	if (!buf)
+		return BB_ERR_ARG;
+	if (cap < BB_HEARTBEAT_LEN)
+		return BB_ERR_CAP;
+	put32(buf, uptime_ms);
+	return BB_HEARTBEAT_LEN;
+}
+
+int bb_unpack_heartbeat(const uint8_t *buf, size_t n, uint32_t *uptime_ms)
+{
+	if (!buf || !uptime_ms)
+		return BB_ERR_ARG;
+	if (n != BB_HEARTBEAT_LEN)
+		return BB_ERR_LEN;
+	*uptime_ms = get32(buf);
+	return BB_OK;
+}
+
 int bb_ble_ctrl_pack(uint8_t buf[BB_BLE_CTRL_LEN], const struct bb_ble_ctrl *c)
 {
 	if (!buf || !c)

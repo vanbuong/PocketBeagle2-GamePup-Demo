@@ -51,6 +51,11 @@ Robot → client:
 {"t":"err","code":"NOT_DRIVER","msg":"..."}
 ```
 
+Implemented in `robot/linux/balbotd` (see its README for the message list). Notes from implementation:
+
+- The lease expires 1 s after the last `drive` **or `ping`**, so a client must keep sending while it waits, for example during the arm window.
+- `drive.flags`: bit1 = boost. `estop` and `disarm` are sent to the M4F three times (15 ms apart) because they are idempotent and one lost frame must not matter.
+
 Rules:
 
 - Messages > 4 KB or > 200 msg/s from a client → connection dropped.

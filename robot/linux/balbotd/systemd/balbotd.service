@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Unverified on hardware. Install: python -m venv /opt/balbotd/venv && /opt/balbotd/venv/bin/pip install .
+[Unit]
+Description=balbotd balance robot supervisor
+After=network.target balbot-m4.service
+Wants=balbot-m4.service
+
+[Service]
+ExecStart=/opt/balbotd/venv/bin/python -m balbotd --config /etc/balbotd/balbotd.toml --rpmsg /dev/rpmsg0 --port 8080
+Restart=always
+RestartSec=1
+# CPU0, real-time priority: balbotd is not in the balance loop but should not be starved by video (doc 01 1.7)
+CPUAffinity=0
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=20
+LimitMEMLOCK=infinity
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DeviceAllow=/dev/rpmsg0 rw
+User=balbot
+Group=balbot
+
+[Install]
+WantedBy=multi-user.target

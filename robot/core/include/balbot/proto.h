@@ -85,6 +85,39 @@ struct bb_tlm_fast {
 int bb_pack_tlm_fast(uint8_t *buf, size_t cap, const struct bb_tlm_fast *t);
 int bb_unpack_tlm_fast(const uint8_t *buf, size_t n, struct bb_tlm_fast *t);
 
+/* CFG_SET (A->M): u16 key, f32 value. CFG_VAL (M->A, reply to CFG_GET and CFG_SET): adds a status byte. */
+struct bb_cfg_set {
+	uint16_t key;
+	float value;
+};
+#define BB_CFG_SET_LEN 6
+int bb_pack_cfg_set(uint8_t *buf, size_t cap, const struct bb_cfg_set *c);
+int bb_unpack_cfg_set(const uint8_t *buf, size_t n, struct bb_cfg_set *c);
+
+enum bb_cfg_status { BB_CFG_OK = 0, BB_CFG_REJECTED = 1, BB_CFG_UNKNOWN_KEY = 2, BB_CFG_OUT_OF_RANGE = 3 };
+struct bb_cfg_val {
+	uint16_t key;
+	float value;
+	uint8_t status;
+};
+#define BB_CFG_VAL_LEN 7
+int bb_pack_cfg_val(uint8_t *buf, size_t cap, const struct bb_cfg_val *c);
+int bb_unpack_cfg_val(const uint8_t *buf, size_t n, struct bb_cfg_val *c);
+
+/* EVT_STATE (M->A): u8 state (enum bb_state), u8 fault bits (enum bb_fault, low 8 bits) */
+struct bb_evt_state {
+	uint8_t state;
+	uint8_t faults;
+};
+#define BB_EVT_STATE_LEN 2
+int bb_pack_evt_state(uint8_t *buf, size_t cap, const struct bb_evt_state *e);
+int bb_unpack_evt_state(const uint8_t *buf, size_t n, struct bb_evt_state *e);
+
+/* CMD_HEARTBEAT (A->M): u32 uptime_ms */
+#define BB_HEARTBEAT_LEN 4
+int bb_pack_heartbeat(uint8_t *buf, size_t cap, uint32_t uptime_ms);
+int bb_unpack_heartbeat(const uint8_t *buf, size_t n, uint32_t *uptime_ms);
+
 /* ---- BLE control frame: u16 seq, i16 vx, i16 wz (x1/1000), u8 flags, u8 crc8 ---- */
 struct bb_ble_ctrl {
 	uint16_t seq;

@@ -4,9 +4,9 @@ name: Robot CI
 on:
   push:
     branches: [main, 'cursor/**', 'docs/**', 'robot/**']
-    paths: ['robot/core/**', 'robot/sim/**', '.github/workflows/robot-ci.yml']
+    paths: ['robot/core/**', 'robot/sim/**', 'robot/linux/**', '.github/workflows/robot-ci.yml']
   pull_request:
-    paths: ['robot/core/**', 'robot/sim/**', '.github/workflows/robot-ci.yml']
+    paths: ['robot/core/**', 'robot/sim/**', 'robot/linux/**', '.github/workflows/robot-ci.yml']
   workflow_dispatch:
 
 concurrency:
@@ -74,3 +74,31 @@ jobs:
         with:
           name: sim-results
           path: robot/sim/sim.xml
+
+  balbotd:
+    name: balbotd tests (fake M4F, C cross-check)
+    runs-on: ubuntu-24.04
+    needs: core-tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: robot/linux/balbotd/pyproject.toml
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cmake ninja-build
+      - name: Build libbalbot.so (reference implementation of the frame format)
+        run: |
+          cmake -S robot/core -B robot/core/build-shared -G Ninja -DBUILD_SHARED=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build robot/core/build-shared --target balbot
+      - run: pip install -e 'robot/linux/balbotd[test]' pytest-cov
+      - name: Tests
+        working-directory: robot/linux/balbotd
+        env:
+          BALBOT_LIB: ${{ github.workspace }}/robot/core/build-shared/libbalbot.so
+        run: python -m pytest -q --junitxml=balbotd.xml --cov=balbotd --cov-report=term --cov-fail-under=85
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: balbotd-results
+          path: robot/linux/balbotd/balbotd.xml

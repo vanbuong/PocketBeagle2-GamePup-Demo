@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "balbotd"
+version = "0.1.0"
+description = "PocketBeagle 2 balance robot supervisor: web/WebSocket control, lease arbitration, rpmsg bridge to the M4F"
+requires-python = ">=3.11"
+license = { text = "GPL-2.0-only" }
+dependencies = ["fastapi>=0.110", "uvicorn>=0.27", "websockets>=12"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-asyncio>=0.23", "httpx>=0.27"]
+
+[project.scripts]
+balbotd = "balbotd.__main__:main"
+
+[tool.setuptools]
+packages = ["balbotd"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]

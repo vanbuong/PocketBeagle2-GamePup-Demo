@@ -6,11 +6,12 @@ Two-wheel self-balancing robot on PocketBeagle 2. Design documents: [`docs/balan
 |---|---|
 | [`core/`](core/) | **Portable C library, host-tested**: CRC, protocol, MPU-6500 helpers, estimators, speed estimation, PID, balance controller, state machine, PRU mailbox layout. 10 test programs, ASan/UBSan clean |
 | [`sim/`](sim/) | **Closed-loop simulator**: nonlinear plant in Python driving the real C controller through `libbalbot.so` (SIM tests) |
+| [`linux/balbotd/`](linux/balbotd/) | **Linux supervisor + fake M4F**: WebSocket/REST, lease arbitration, failsafe, rpmsg bridge; 99 tests |
 | [`hardware/`](hardware/) | KiCad Rev 0 schematic, pin map, BOM, tests (see its README) |
 | [`firmware-m4/`](firmware-m4/) | Zephyr M4F application **skeleton, not built** (no Zephyr SDK available yet; hardware access is stubbed) |
 | [`firmware-pru/`](firmware-pru/) | PRU plan only; waits for the verified pin map |
 
-Not started: Linux supervisor (`balbotd`), web UI, React Native app, video service.
+Not started: web UI, React Native app, video service, BLE bridge.
 
 ## Run the tests
 

@@ -3,7 +3,10 @@
 
 #include "balbot/crc.h"
 #include "balbot/proto.h"
+#include "balbot/state.h"
 #include "tst.h"
+
+#define BB_ST_BALANCING_FOR_TEST BB_ST_BALANCING
 
 static void round_trip_frame(void)
 {
@@ -127,6 +130,44 @@ static void tlm_fast_pack(void)
 	CHECK_EQ(b[3], 0xDE);
 }
 
+static void cfg_messages(void)
+{
+	uint8_t b[16];
+	struct bb_cfg_set s = {0x1234, -12.5f}, so;
+	struct bb_cfg_val v = {7, 3.25f, BB_CFG_OUT_OF_RANGE}, vo;
+	struct bb_evt_state e = {BB_ST_BALANCING_FOR_TEST, 0x14}, eo;
+	uint32_t up = 0;
+
+	CHECK_EQ(bb_pack_cfg_set(b, sizeof b, &s), BB_CFG_SET_LEN);
+	CHECK_EQ(b[0], 0x34);
+	CHECK_EQ(b[1], 0x12);
+	CHECK_EQ(bb_unpack_cfg_set(b, BB_CFG_SET_LEN, &so), BB_OK);
+	CHECK_EQ(so.key, 0x1234);
+	CHECK(so.value == -12.5f);
+	CHECK_EQ(bb_unpack_cfg_set(b, 5, &so), BB_ERR_LEN);
+	CHECK_EQ(bb_pack_cfg_set(b, 5, &s), BB_ERR_CAP);
+	/* -12.5f is 0xC1480000 little endian after the key */
+	CHECK_EQ(b[2], 0x00);
+	CHECK_EQ(b[3], 0x00);
+	CHECK_EQ(b[4], 0x48);
+	CHECK_EQ(b[5], 0xC1);
+	CHECK_EQ(bb_pack_cfg_val(b, sizeof b, &v), BB_CFG_VAL_LEN);
+	CHECK_EQ(bb_unpack_cfg_val(b, BB_CFG_VAL_LEN, &vo), BB_OK);
+	CHECK_EQ(vo.key, 7);
+	CHECK(vo.value == 3.25f);
+	CHECK_EQ(vo.status, BB_CFG_OUT_OF_RANGE);
+	CHECK_EQ(bb_unpack_cfg_val(b, 6, &vo), BB_ERR_LEN);
+	CHECK_EQ(bb_pack_evt_state(b, sizeof b, &e), BB_EVT_STATE_LEN);
+	CHECK_EQ(bb_unpack_evt_state(b, BB_EVT_STATE_LEN, &eo), BB_OK);
+	CHECK_EQ(eo.state, BB_ST_BALANCING_FOR_TEST);
+	CHECK_EQ(eo.faults, 0x14);
+	CHECK_EQ(bb_pack_heartbeat(b, sizeof b, 0xA1B2C3D4u), BB_HEARTBEAT_LEN);
+	CHECK_EQ(b[0], 0xD4);
+	CHECK_EQ(bb_unpack_heartbeat(b, 4, &up), BB_OK);
+	CHECK_EQ(up, 0xA1B2C3D4u);
+	CHECK_EQ(bb_unpack_heartbeat(b, 3, &up), BB_ERR_LEN);
+}
+
 static void ble_frame(void)
 {
 	uint8_t b[BB_BLE_CTRL_LEN];
@@ -171,6 +212,7 @@ int main(void)
 	RUN(fuzz_never_crashes_or_accepts_garbage);
 	RUN(cmd_drive_pack);
 	RUN(tlm_fast_pack);
+	RUN(cfg_messages);
 	RUN(ble_frame);
 	RUN(sequence_tracking);
 	TEST_MAIN_END();

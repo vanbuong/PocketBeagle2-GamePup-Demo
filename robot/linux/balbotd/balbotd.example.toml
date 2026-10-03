@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Example configuration. Generate tokens with:  python -m balbotd --new-token driver
+# Only the SHA-256 of a token is stored here.
+
+[shaping]
+v_max = 0.6        # m/s at full stick (the M4F firmware limit is authoritative)
+w_max = 2.5        # rad/s at full stick
+deadband = 0.05
+expo_cubic = 0.6
+
+[timing]
+drive_failsafe_s = 0.25   # no drive from the driver -> zero velocity
+lease_timeout_s = 1.0
+m4f_dead_s = 0.5
+
+[limits]
+max_message_bytes = 4096
+max_msgs_per_s = 200
+
+# [[tokens]]
+# name = "laptop"
+# role = "admin"        # viewer | driver | admin
+# sha256 = "<64 hex characters>"

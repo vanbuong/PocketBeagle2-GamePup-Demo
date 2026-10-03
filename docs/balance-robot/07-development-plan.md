@@ -30,7 +30,7 @@ development access, ILI9341 and OLED UI).
 
 ## 7.1b What exists today
 
-`robot/core` (portable C, host-tested), `robot/sim` (closed-loop simulator), `robot/hardware` (KiCad Rev 0), a `robot/firmware-m4`
+`robot/core` (portable C, host-tested), `robot/sim` (closed-loop simulator), `robot/linux/balbotd` (supervisor with a fake M4F), `robot/hardware` (KiCad Rev 0), a `robot/firmware-m4`
 skeleton that is **not built**, and CI workflows that have not run on GitHub yet. See `robot/README.md`.
 
 ## 7.2 Milestones
