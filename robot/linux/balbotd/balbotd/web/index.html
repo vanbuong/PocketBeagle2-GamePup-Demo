@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>BalBot Control</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main id="app" class="app" data-conn="offline" data-state="UNKNOWN" data-leased="no" data-role="none">
+  <header class="bar">
+    <h1 class="brand">BalBot</h1>
+    <ul class="chips" aria-label="Status">
+      <li class="chip" id="chip-conn"><span class="label">Link</span> <b id="v-conn">offline</b></li>
+      <li class="chip" id="chip-state"><span class="label">Robot</span> <b id="v-state">&ndash;</b></li>
+      <li class="chip" id="chip-driver"><span class="label">Driver</span> <b id="v-driver">none</b></li>
+      <li class="chip" id="chip-batt"><span class="label">Battery</span> <b id="v-batt">&ndash;</b></li>
+      <li class="chip" id="chip-rtt"><span class="label">Latency</span> <b id="v-rtt">&ndash;</b></li>
+    </ul>
+    <button id="btn-settings" class="icon-btn" type="button" aria-label="Settings">&#9881;</button>
+  </header>
+
+  <section class="stage" aria-label="Camera and telemetry">
+    <img id="video" class="video" alt="Live camera view from the robot" hidden>
+    <p id="video-msg" class="video-msg">Not connected</p>
+    <p id="banner" class="banner" role="alert" hidden></p>
+    <dl class="readouts" aria-label="Telemetry">
+      <div><dt>Pitch</dt><dd><span id="t-pitch">0.0</span>&deg;</dd></div>
+      <div><dt>Speed</dt><dd><span id="t-v">0.00</span> m/s</dd></div>
+      <div><dt>Turn</dt><dd><span id="t-yaw">0</span> &deg;/s</dd></div>
+      <div><dt>Motors</dt><dd><span id="t-u">0.0</span> V</dd></div>
+    </dl>
+    <canvas id="spark" class="spark" width="240" height="56" role="img" aria-label="Pitch over the last five seconds"></canvas>
+  </section>
+
+  <section class="controls" aria-label="Controls">
+    <div id="stick-speed" class="stick" role="application" aria-label="Speed stick: drag up to drive forward, down for reverse" tabindex="-1">
+      <span class="stick-label">SPEED</span><span class="knob"></span>
+    </div>
+
+    <div class="actions">
+      <button id="btn-control" class="btn primary" type="button">Take control</button>
+      <div class="row">
+        <button id="btn-arm" class="btn" type="button">Arm</button>
+        <button id="btn-disarm" class="btn" type="button">Disarm</button>
+      </div>
+      <div class="row">
+        <button id="btn-reset" class="btn" type="button">Reset fault</button>
+        <button id="btn-boost" class="btn toggle" type="button" aria-pressed="false">Boost</button>
+      </div>
+      <button id="btn-estop" class="btn estop" type="button" aria-label="Emergency stop (space bar)">E-STOP</button>
+    </div>
+
+    <div id="stick-turn" class="stick" role="application" aria-label="Turn stick: drag left to turn left, right to turn right" tabindex="-1">
+      <span class="stick-label">TURN</span><span class="knob"></span>
+    </div>
+  </section>
+
+  <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
+</main>
+
+<dialog id="login" aria-labelledby="login-title">
+  <form id="login-form" method="dialog">
+    <h2 id="login-title">Connect to the robot</h2>
+    <p class="hint">Enter the access token. It is kept for this browser tab only.</p>
+    <label for="token">Access token</label>
+    <input id="token" name="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <p id="login-error" class="error" role="alert" hidden></p>
+    <button id="login-go" class="btn primary" type="submit">Connect</button>
+  </form>
+</dialog>
+
+<dialog id="settings" aria-labelledby="settings-title">
+  <form method="dialog">
+    <h2 id="settings-title">Settings</h2>
+    <label for="video-fps">Video frame rate</label>
+    <select id="video-fps">
+      <option value="30">30 fps (best)</option>
+      <option value="15">15 fps</option>
+      <option value="5">5 fps (slow link)</option>
+    </select>
+    <p class="hint">Keys: W/S or arrows drive, A/D turn, Shift boost, Space emergency stop, Esc release control. Gamepad: left stick speed, right stick turn, B stop, X take control.</p>
+    <div class="row">
+      <button id="btn-forget" class="btn" type="button">Forget token</button>
+      <button class="btn primary" value="close">Close</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="js/ui.js"></script>
+</body>
+</html>

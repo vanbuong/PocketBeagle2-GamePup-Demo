@@ -22,6 +22,7 @@ enum bb_msg_type {
 	BB_CMD_DISARM = 0x03,
 	BB_CMD_ESTOP = 0x04,
 	BB_CMD_HEARTBEAT = 0x05,
+	BB_CMD_RESET = 0x06, /* leave FAULT (only if the cause is gone), then re-run calibration */
 	BB_CFG_SET = 0x10,
 	BB_CFG_GET = 0x11,
 	BB_CFG_SAVE = 0x12,

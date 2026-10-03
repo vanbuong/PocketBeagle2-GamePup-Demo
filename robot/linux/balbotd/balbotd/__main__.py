@@ -18,6 +18,7 @@ from .app import create_app
 from .arbiter import Role
 from .config import Config, load
 from .fakem4 import FakeConfig, FakeM4F, serve_unix
+from .video import CommandSource, PatternSource, VideoHub, camera_command
 from .link import FdLink, MemoryLink
 from .supervisor import Supervisor
 
@@ -41,7 +42,16 @@ def build_app(cfg: Config, rpmsg: str | None = None, m4_socket: str | None = Non
     else:
         raise SystemExit("choose one of --rpmsg PATH, --m4-socket PATH or --fake-m4")
     sup = Supervisor(link, cfg, clock, link_factory=factory)
-    app = create_app(sup, auth, start_background=False)
+    mode = cfg.video.mode if cfg.video.mode != "auto" else ("pattern" if fake else "off")
+    hub = None
+    if mode == "pattern":
+        hub = VideoHub(PatternSource(), cfg.video.idle_stop_s)
+    elif mode == "camera":
+        hub = VideoHub(CommandSource(camera_command(cfg.video.device, cfg.video.size, cfg.video.fps)), cfg.video.idle_stop_s)
+    elif mode == "command":
+        hub = VideoHub(CommandSource(list(cfg.video.command)), cfg.video.idle_stop_s)
+    app = create_app(sup, auth, start_background=False, video=hub)
+    app.state.fake_m4 = fake_m4  # None unless --fake-m4: lets tests poke the fake robot
 
     @contextlib.asynccontextmanager
     async def lifespan(a):

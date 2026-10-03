@@ -29,10 +29,21 @@ class Limits:
 
 
 @dataclass
+class VideoConfig:
+    mode: str = "auto"           # auto | off | pattern | camera | command ; auto = pattern with --fake-m4, else off
+    device: str = "/dev/video0"  # camera mode
+    size: str = "1280x720"
+    fps: int = 30
+    command: list = field(default_factory=list)  # command mode: argv writing concatenated JPEGs to stdout
+    idle_stop_s: float = 3.0     # stop the source this long after the last viewer left
+
+
+@dataclass
 class Config:
     shaping: ShapingConfig = field(default_factory=ShapingConfig)
     timing: Timing = field(default_factory=Timing)
     limits: Limits = field(default_factory=Limits)
+    video: VideoConfig = field(default_factory=VideoConfig)
     tokens: list[TokenEntry] = field(default_factory=list)
 
 
@@ -52,6 +63,12 @@ def parse(data: dict) -> Config:
         cfg.timing = _section(Timing, data["timing"])
     if "limits" in data:
         cfg.limits = _section(Limits, data["limits"])
+    if "video" in data:
+        cfg.video = _section(VideoConfig, data["video"])
+        if cfg.video.mode not in ("auto", "off", "pattern", "camera", "command"):
+            raise ValueError("video.mode must be auto, off, pattern, camera or command")
+        if cfg.video.mode == "command" and not (cfg.video.command and all(isinstance(a, str) for a in cfg.video.command)):
+            raise ValueError("video.command must be a non-empty list of strings in command mode")
     for t in data.get("tokens", []):
         role = {"viewer": Role.VIEWER, "driver": Role.DRIVER, "admin": Role.ADMIN}.get(t.get("role"))
         if role is None:

@@ -222,3 +222,19 @@ async def test_calibration_request_gets_a_result(wire):
     assert await wait_until(lambda: wire.fake.state == P.ST_STANDBY, 2)
     await wire.tx(P.CAL_START, b"\x00")
     assert await wait_until(lambda: wire.last(P.CAL_RESULT) is not None, 1)
+
+
+async def test_reset_leaves_fault_only_when_the_cause_is_gone(wire):
+    assert await wait_until(lambda: wire.fake.state == P.ST_STANDBY, 2)
+    await wire.tx(P.CMD_RESET)  # nothing to reset
+    await asyncio.sleep(0.05)
+    assert wire.fake.state == P.ST_STANDBY and wire.fake.refused == 1
+    wire.fake.press_estop(True)
+    assert await wait_until(lambda: wire.fake.state == P.ST_FAULT, 1)
+    await wire.tx(P.CMD_RESET)
+    await asyncio.sleep(0.05)
+    assert wire.fake.state == P.ST_FAULT
+    wire.fake.press_estop(False)
+    await wire.tx(P.CMD_RESET)
+    assert await wait_until(lambda: wire.fake.state == P.ST_STANDBY, 2)  # BOOT -> CALIBRATING -> STANDBY again
+    assert wire.fake.faults == 0

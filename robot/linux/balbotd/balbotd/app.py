@@ -6,15 +6,24 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import os
+import time
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__, cfgkeys
 from .arbiter import Role, Transport
 from .auth import Authenticator, TokenEntry
 from .supervisor import ClientViolation, Supervisor
+from .video import VideoHub
+
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+# The UI is plain files with no inline script or style. Images may come from this origin or blobs only.
+CSP = ("default-src 'self'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; style-src 'self'; "
+       "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 
 
 def _token_from(request_headers, query_token: Optional[str]) -> Optional[str]:
@@ -24,7 +33,8 @@ def _token_from(request_headers, query_token: Optional[str]) -> Optional[str]:
     return query_token
 
 
-def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = True) -> FastAPI:
+def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = True,
+               video: Optional[VideoHub] = None) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         if start_background:
@@ -32,6 +42,8 @@ def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = Tr
         try:
             yield
         finally:
+            if video:
+                await video.stop()
             if start_background:
                 await sup.stop()
 
@@ -52,9 +64,21 @@ def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = Tr
             return entry
         return dep
 
+    @app.middleware("http")
+    async def ui_headers(request: Request, call_next):
+        resp = await call_next(request)
+        if request.url.path.startswith("/ui"):
+            resp.headers["Content-Security-Policy"] = CSP
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+            resp.headers["Referrer-Policy"] = "no-referrer"
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     @app.get("/")
-    async def root():
-        return {"service": "balbotd", "version": __version__, "api": "/api/v1", "ws": "/ws?token=..."}
+    async def root(request: Request):
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/ui/")
+        return {"service": "balbotd", "version": __version__, "api": "/api/v1", "ws": "/ws?token=...", "ui": "/ui/"}
 
     @app.get("/api/v1/state")
     async def get_state(_: TokenEntry = Depends(current(Role.VIEWER))):
@@ -62,7 +86,56 @@ def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = Tr
 
     @app.get("/api/v1/stats")
     async def get_stats(_: TokenEntry = Depends(current(Role.ADMIN))):
-        return {**dataclasses.asdict(sup.stats), "clients": len(sup.clients), "m4f_alive": sup.m4f_alive}
+        out = {**dataclasses.asdict(sup.stats), "clients": len(sup.clients), "m4f_alive": sup.m4f_alive}
+        if video:
+            out["video"] = {**dataclasses.asdict(video.stats), "source": type(video.source).__name__}
+        return out
+
+    @app.get("/api/v1/video/info")
+    async def video_info(_: TokenEntry = Depends(current(Role.VIEWER))):
+        return {"enabled": video is not None, "mjpeg": "/api/v1/video/mjpeg", "snapshot": "/api/v1/video/snapshot"}
+
+    @app.get("/api/v1/video/snapshot")
+    async def video_snapshot(_: TokenEntry = Depends(current(Role.VIEWER))):
+        if video is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "video is disabled")
+        f = await video.snapshot()
+        if f is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no frame available")
+        return Response(f.data, media_type=f.mime, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/v1/video/mjpeg")
+    async def video_mjpeg(fps: float = 0.0, _: TokenEntry = Depends(current(Role.VIEWER))):
+        """multipart/x-mixed-replace stream. `fps` (1..30) thins the stream to save bandwidth; 0 = every frame."""
+        if video is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "video is disabled")
+        interval = 1.0 / min(30.0, max(1.0, fps)) if fps > 0 else 0.0
+
+        async def gen():
+            sub = video.subscribe()
+            last_sent = 0.0
+            idle = 0.0
+            try:
+                while True:
+                    f = await sub.next(1.0)
+                    if f is None:
+                        idle += 1.0
+                        if idle >= 20.0:  # a dead source: end the response, the client reconnects
+                            return
+                        continue
+                    idle = 0.0
+                    now = time.monotonic()
+                    if interval and now - last_sent < interval:
+                        continue
+                    last_sent = now
+                    yield (b"--frame\r\nContent-Type: " + f.mime.encode() + b"\r\nContent-Length: "
+                           + str(len(f.data)).encode() + b"\r\n\r\n" + f.data + b"\r\n")
+            finally:
+                sub.close()
+
+        return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame",
+                                 headers={"Cache-Control": "no-store"})
+
 
     @app.get("/api/v1/config")
     async def get_config(_: TokenEntry = Depends(current(Role.ADMIN))):
@@ -115,7 +188,7 @@ def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = Tr
                 await sup.handle(client, text)
                 if client.closed:
                     break
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError):  # RuntimeError: peer vanished between accept and the first read
             pass
         except ClientViolation as e:
             with contextlib.suppress(Exception):
@@ -124,4 +197,6 @@ def create_app(sup: Supervisor, auth: Authenticator, start_background: bool = Tr
             out_task.cancel()
             sup.remove_client(client)
 
+    if os.path.isdir(WEB_DIR):
+        app.mount("/ui", StaticFiles(directory=WEB_DIR, html=True), name="ui")
     return app

@@ -76,6 +76,7 @@ class FakeM4F:
         self._upright_t = 0.0
         self._disarm_seen = False
         self._pitch_override: Optional[float] = None
+        self.estop_pressed = False  # the hardware E-stop loop, like the NC contact on the GPIO
         self._hung = False
         self._last_tick = self._t0
         self._last_tlm = self._t0
@@ -100,6 +101,9 @@ class FakeM4F:
 
     def raise_fault(self, bits: int) -> None:
         self._enter_fault(bits)
+
+    def press_estop(self, pressed: bool = True) -> None:
+        self.estop_pressed = pressed
 
     def set_vbat(self, volts: float) -> None:
         self.vbat = volts
@@ -189,6 +193,13 @@ class FakeM4F:
                     self._disarm_seen = True
                 self._v_target = self._w_target = 0.0
                 await self._send(P.EVT_STATE, P.pack_evt_state(self.state, self.faults))
+            elif t == P.CMD_RESET:
+                if self.state == P.ST_FAULT and not self.estop_pressed:
+                    self.faults = 0
+                    self._enter(P.ST_BOOT)
+                else:
+                    self.refused += 1
+                await self._send(P.EVT_STATE, P.pack_evt_state(self.state, self.faults))
             elif t == P.CMD_ESTOP:
                 self._enter_fault(P.FAULT_ESTOP)
                 await self._send(P.EVT_STATE, P.pack_evt_state(self.state, self.faults))
@@ -269,6 +280,9 @@ class FakeM4F:
 
         # state machine (mirrors core/src/state.c)
         ap = abs(self.pitch_deg)
+        if self.estop_pressed and self.state != P.ST_FAULT:
+            self._enter_fault(P.FAULT_ESTOP)
+            prev_state = -1  # force an EVT_STATE below
         if self.state == P.ST_BOOT and now - self._state_t0 >= c.boot_s:
             self._enter(P.ST_CALIBRATING)
         elif self.state == P.ST_CALIBRATING and now - self._state_t0 >= c.cal_s:

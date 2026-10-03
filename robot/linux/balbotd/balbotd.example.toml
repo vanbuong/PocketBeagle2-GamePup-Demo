@@ -21,3 +21,12 @@ max_msgs_per_s = 200
 # name = "laptop"
 # role = "admin"        # viewer | driver | admin
 # sha256 = "<64 hex characters>"
+
+[video]
+mode = "auto"          # auto (test pattern with --fake-m4, otherwise off) | off | pattern | camera | command
+# mode = "camera"      # ffmpeg copies the camera's MJPG stream (no decode/encode): needs ffmpeg and a UVC camera
+# device = "/dev/video0"
+# size = "1280x720"
+# fps = 30
+# mode = "command"     # any command that writes concatenated JPEG frames to stdout
+# command = ["ffmpeg", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=15", "-c:v", "mjpeg", "-f", "image2pipe", "-"]

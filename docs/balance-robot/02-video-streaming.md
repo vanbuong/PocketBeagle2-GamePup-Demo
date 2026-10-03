@@ -26,6 +26,11 @@ Targets: the selected UVC camera (doc 8.4) offers MJPG 1280x720, 1920x1080 and 6
 low-bandwidth and WebRTC source. 720p software x264 is not planned on the A53s.
 Glass-to-glass latency goal < 250 ms; hard ceiling for usable driving is ~400 ms.
 
+> **Implemented (V1):** `robot/linux/balbotd` serves `/api/v1/video/mjpeg` and `/snapshot`. Instead of go2rtc it runs
+> `ffmpeg -f v4l2 -input_format mjpeg ... -c:v copy -f image2pipe -` itself and forwards the JPEG frames (never decoded), one camera process
+> for any number of viewers, stopped when nobody watches. go2rtc remains the plan for WebRTC (V2). Not yet measured on the real camera: latency,
+> CPU and the 720p/1080p USB bandwidth.
+
 ## 2.3 Pipeline
 
 ```

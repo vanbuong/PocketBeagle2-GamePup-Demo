@@ -116,6 +116,7 @@ class Supervisor:
         self._next_id = 0
         self._last_state_pub: Optional[tuple] = None
         self._bg: set[asyncio.Task] = set()
+        self._last_critical: dict[int, float] = {}
 
     # ---- clients ---------------------------------------------------------------------
     def add_client(self, name: str, role: Role, transport: Transport = Transport.WIFI) -> Client:
@@ -229,6 +230,11 @@ class Supervisor:
             return self._err(c, "NOT_DRIVER", "arming needs the lease")
         await self._send(P.CMD_ARM)
 
+    async def _on_reset(self, c: Client, msg: dict) -> None:
+        if not (c.role == Role.ADMIN or self.arbiter.is_driver(c.id)):
+            return self._err(c, "NOT_DRIVER", "reset needs the lease")
+        await self._send(P.CMD_RESET)  # not repeated: a late duplicate could clear a fresh fault
+
     async def _on_disarm(self, c: Client, msg: dict) -> None:
         await self._send_critical(P.CMD_DISARM)
 
@@ -299,7 +305,15 @@ class Supervisor:
         return ok
 
     async def _send_critical(self, type_: int) -> None:
-        """DISARM / ESTOP: send now, then twice more shortly after (idempotent, survives a dropped frame)."""
+        """DISARM / ESTOP: send now, then twice more shortly after (idempotent, survives a dropped frame).
+
+        Repeats of the same command within 40 ms (the page itself sends E-STOP three times) are coalesced: the resends
+        already scheduled cover them, so the M4F sees three frames, not nine.
+        """
+        now = self.clock()
+        if now - self._last_critical.get(type_, -math.inf) < 0.040:
+            return
+        self._last_critical[type_] = now
         await self._send(type_)
         t = asyncio.get_running_loop().create_task(self._resend(type_))
         self._bg.add(t)

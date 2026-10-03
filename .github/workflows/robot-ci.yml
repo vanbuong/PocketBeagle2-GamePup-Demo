@@ -91,14 +91,25 @@ jobs:
         run: |
           cmake -S robot/core -B robot/core/build-shared -G Ninja -DBUILD_SHARED=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build robot/core/build-shared --target balbot
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pip install -e 'robot/linux/balbotd[test]' pytest-cov
-      - name: Tests
+      - run: playwright install --with-deps chromium
+      - name: Page logic unit tests (Node)
+        working-directory: robot/linux/balbotd
+        run: node --test "tests/js/*.test.mjs"
+      - name: Python tests (incl. Chromium end-to-end of the control page)
         working-directory: robot/linux/balbotd
         env:
           BALBOT_LIB: ${{ github.workspace }}/robot/core/build-shared/libbalbot.so
+          BALBOT_SHOTS: ${{ github.workspace }}/robot/linux/balbotd/shots
         run: python -m pytest -q --junitxml=balbotd.xml --cov=balbotd --cov-report=term --cov-fail-under=85
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: balbotd-results
-          path: robot/linux/balbotd/balbotd.xml
+          path: |
+            robot/linux/balbotd/balbotd.xml
+            robot/linux/balbotd/shots

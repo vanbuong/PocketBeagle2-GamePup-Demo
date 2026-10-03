@@ -125,6 +125,10 @@ Single driver at a time; any number of viewers.
   while `BALANCING`; the keys marked *safety* in the config table require `DISARMED`.
 - Updates (OTA of M4F/PRU `.elf` and `balbotd`) signed with a project key (decision Q6).
 
+> **Implemented:** the page below exists in `robot/linux/balbotd/balbotd/web/` (served at `/ui/`): dual sticks with touch, keyboard and gamepad,
+> status chips, telemetry with a pitch plot, E-STOP, take/release control, arm/disarm/reset, MJPEG video. Not yet: tuning plots, calibration wizard,
+> config editing. A `reset` message and `CMD_RESET` (0x06) were added so a latched fault can be cleared from the page.
+
 ## 3.8 Web UI
 
 Single page, mobile-first:

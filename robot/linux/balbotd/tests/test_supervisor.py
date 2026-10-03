@@ -435,3 +435,62 @@ async def test_reconnect_after_the_link_dies():
         await sup.stop()
         for e in ends:
             await e[2].stop()
+
+
+# ---- fault reset ---------------------------------------------------------------------------------------------
+async def test_reset_recovers_from_an_estop_and_needs_the_lease(rig):
+    d, v = rig.client("d"), rig.client("v", Role.VIEWER)
+    await rig.to_balancing(d)
+    await d.send({"t": "estop"})
+    assert await wait_until(lambda: rig.fake.state == P.ST_FAULT, 1.0)
+    await v.send({"t": "reset"})
+    assert (await v.recv("err"))["code"] == "NOT_DRIVER"
+    assert rig.fake.state == P.ST_FAULT
+    await asyncio.sleep(0.08)  # let the two redundant ESTOP resends (15 ms, 30 ms) land: a reset racing them would lose, safely
+    await d.send({"t": "ping", "ts": 1})  # a real client keeps pinging; the 1 s lease would otherwise have lapsed
+    await d.send({"t": "reset"})
+    assert await wait_until(lambda: rig.fake.state == P.ST_STANDBY, 3.0)
+    assert rig.fake.faults == 0
+    st = await d.recv("state", 2.0, state="STANDBY")
+    assert st["fault_names"] == []
+
+
+async def test_reset_is_refused_while_the_hardware_estop_is_still_pressed(rig):
+    adm = rig.client("adm", Role.ADMIN)
+    assert await wait_until(lambda: rig.fake.state == P.ST_STANDBY, 3.0)
+    rig.fake.press_estop(True)
+    assert await wait_until(lambda: rig.fake.state == P.ST_FAULT, 1.0)
+    await adm.send({"t": "reset"})
+    await asyncio.sleep(0.2)
+    assert rig.fake.state == P.ST_FAULT and rig.fake.refused >= 1
+    rig.fake.press_estop(False)
+    await adm.send({"t": "reset"})
+    assert await wait_until(lambda: rig.fake.state == P.ST_STANDBY, 3.0)
+
+
+async def test_reset_is_sent_once_so_a_late_duplicate_cannot_clear_a_fresh_fault(rig):
+    adm = rig.client("adm", Role.ADMIN)
+    assert await wait_until(lambda: rig.fake.state == P.ST_STANDBY, 3.0)
+    seen = []
+    orig = rig.a.drop_filter
+    rig.a.drop_filter = lambda d: (seen.append(P.decode(d).type) or False)
+    await adm.send({"t": "estop"})
+    assert await wait_until(lambda: rig.fake.state == P.ST_FAULT, 1.0)
+    await asyncio.sleep(0.08)
+    await adm.send({"t": "reset"})
+    await asyncio.sleep(0.2)
+    assert seen.count(P.CMD_RESET) == 1 and seen.count(P.CMD_ESTOP) == 3
+
+
+async def test_repeated_estops_from_the_page_are_coalesced_but_a_later_one_still_goes_out(rig):
+    c = rig.client("v", Role.VIEWER)
+    seen = []
+    rig.a.drop_filter = lambda d: (seen.append(P.decode(d).type) or False)
+    for _ in range(3):  # what the page does: now, +15 ms, +30 ms
+        await c.send({"t": "estop"})
+        await asyncio.sleep(0.015)
+    await asyncio.sleep(0.15)
+    assert seen.count(P.CMD_ESTOP) == 3, seen.count(P.CMD_ESTOP)
+    await c.send({"t": "estop"})  # a genuinely new press later
+    await asyncio.sleep(0.15)
+    assert seen.count(P.CMD_ESTOP) == 6

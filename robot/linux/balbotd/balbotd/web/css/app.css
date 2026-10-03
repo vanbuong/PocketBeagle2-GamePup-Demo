@@ -1,0 +1,158 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+:root {
+  --bg: #0e1116;
+  --panel: rgba(18, 22, 29, 0.82);
+  --panel-solid: #171c24;
+  --text: #e8edf3;
+  --muted: #9aa7b6;
+  --line: #2b3441;
+  --accent: #4aa3ff;
+  --on-accent: #06121f;
+  --ok: #3ccf91;
+  --warn: #ffb020;
+  --bad: #ff5c5c;
+  --stop: #d92d2d;
+  --radius: 14px;
+  --gutter: max(12px, env(safe-area-inset-left));
+  color-scheme: dark light;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef1f5;
+    --panel: rgba(255, 255, 255, 0.86);
+    --panel-solid: #ffffff;
+    --text: #151a21;
+    --muted: #55606e;
+    --line: #c9d1db;
+    --accent: #0b63c5;
+    --on-accent: #ffffff;
+    --ok: #0a7d4f;
+    --warn: #9a5b00;
+    --bad: #b3261e;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+[hidden] { display: none !important; }
+
+.app {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) var(--gutter) max(10px, env(safe-area-inset-bottom));
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---- status bar ---- */
+.bar { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand { font-size: 1rem; margin: 0; letter-spacing: 0.04em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
+.chip { background: var(--panel-solid); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 0.8rem; white-space: nowrap; }
+.chip .label { color: var(--muted); }
+.chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.app[data-conn="online"] #chip-conn b { color: var(--ok); }
+.app[data-conn="reconnecting"] #chip-conn b, .app[data-conn="connecting"] #chip-conn b { color: var(--warn); }
+.app[data-conn="denied"] #chip-conn b, .app[data-conn="offline"] #chip-conn b { color: var(--bad); }
+.app[data-kind="active"] #chip-state b { color: var(--ok); }
+.app[data-kind="warn"] #chip-state b, .app[data-kind="wait"] #chip-state b { color: var(--warn); }
+.app[data-kind="bad"] #chip-state b { color: var(--bad); }
+.chip.warn b { color: var(--warn); }
+.chip.bad b { color: var(--bad); }
+.icon-btn { background: var(--panel-solid); color: var(--text); border: 1px solid var(--line); border-radius: 10px; width: 44px; height: 44px; font-size: 1.3rem; }
+
+/* ---- stage: video + telemetry ---- */
+.stage { position: relative; background: #000; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); min-height: 0; }
+.video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.video-msg { position: absolute; inset: 0; display: grid; place-items: start center; padding-top: 16%; margin: 0; color: #c8d2de; font-size: 0.95rem; text-align: center; padding: 1rem; }
+.banner { position: absolute; left: 8px; right: 8px; top: 8px; margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--bad); color: #fff; font-weight: 600; }
+.readouts { position: absolute; left: 8px; bottom: 8px; margin: 0; display: grid; grid-template-columns: repeat(2, auto); gap: 2px 14px; padding: 6px 10px; border-radius: 10px; background: var(--panel); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
+.readouts div { display: flex; gap: 6px; align-items: baseline; }
+.readouts dt { color: var(--muted); }
+.readouts dd { margin: 0; font-weight: 600; }
+.spark { position: absolute; right: 8px; bottom: 8px; width: min(240px, 38%); height: auto; border-radius: 10px; background: var(--panel); }
+
+/* ---- controls ---- */
+.controls { display: grid; grid-template-columns: 1fr auto 1fr; grid-template-areas: "speed actions turn"; gap: 10px; align-items: center; }
+#stick-speed { grid-area: speed; }
+#stick-turn { grid-area: turn; }
+.actions { grid-area: actions; }
+.stick {
+  --size: min(34vw, 30dvh, 190px);
+  position: relative; justify-self: center; width: var(--size); height: var(--size);
+  border-radius: 50%; background: var(--panel-solid); border: 2px solid var(--line);
+  touch-action: none; display: grid; place-items: center;
+}
+.stick-label { position: absolute; top: 8px; font-size: 0.7rem; letter-spacing: 0.12em; color: var(--muted); pointer-events: none; }
+.knob { width: 38%; height: 38%; border-radius: 50%; background: var(--accent); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); pointer-events: none; transition: transform 90ms ease-out; }
+.stick.active .knob { transition: none; }
+#stick-speed::before, #stick-turn::before { content: ""; position: absolute; background: var(--line); pointer-events: none; }
+#stick-speed::before { width: 2px; height: 70%; }
+#stick-turn::before { height: 2px; width: 70%; }
+.app:not([data-leased="yes"]) .stick { opacity: 0.45; }
+.app:not([data-leased="yes"]) .knob { background: var(--muted); }
+
+.actions { display: grid; gap: 8px; width: min(46vw, 260px); }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.btn { min-height: 48px; padding: 8px 12px; font: inherit; font-weight: 600; color: var(--text); background: var(--panel-solid); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.app[data-leased="yes"] #btn-control { background: var(--panel-solid); color: var(--text); border-color: var(--accent); }
+.btn.toggle[aria-pressed="true"] { background: var(--warn); color: #1a1200; border-color: var(--warn); }
+.btn.estop { min-height: 64px; background: var(--stop); border-color: var(--stop); color: #fff; font-size: 1.25rem; letter-spacing: 0.08em; }
+.btn.estop:active:not(:disabled) { filter: brightness(1.15); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.toast { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); margin: 0; padding: 8px 14px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--line); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); max-width: 90vw; z-index: 5; }
+
+/* ---- dialogs ---- */
+dialog { background: var(--panel-solid); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; width: min(92vw, 420px); }
+dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog h2 { margin: 0 0 6px; font-size: 1.1rem; }
+dialog label { display: block; margin-top: 12px; font-size: 0.85rem; color: var(--muted); }
+dialog input, dialog select { width: 100%; margin-top: 4px; min-height: 44px; padding: 8px 10px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+dialog .hint { color: var(--muted); font-size: 0.85rem; }
+dialog .error { color: var(--bad); font-weight: 600; }
+dialog .btn { margin-top: 14px; width: 100%; }
+dialog .row { margin-top: 6px; }
+
+/* ---- narrow or portrait screens: buttons on top, the two sticks side by side below ---- */
+@media (max-width: 640px), (orientation: portrait) {
+  .app { grid-template-rows: auto minmax(120px, 1fr) auto; }
+  .controls { grid-template-columns: 1fr 1fr; grid-template-areas: "actions actions" "speed turn"; }
+  .stick { --size: min(40vw, 24dvh, 190px); }
+  .actions { width: 100%; grid-template-columns: 1fr 1fr; }
+  .actions .row { display: contents; }
+  #btn-control { order: 1; }
+  .btn.estop { order: 2; min-height: 56px; }
+  #btn-arm { order: 3; }
+  #btn-disarm { order: 4; }
+  #btn-reset { order: 5; }
+  #btn-boost { order: 6; }
+}
+
+/* ---- landscape phones and wide screens: controls overlay the bottom corners ---- */
+@media (orientation: landscape) and (max-height: 520px) {
+  .app { grid-template-rows: auto minmax(0, 1fr); }
+  .controls { position: fixed; left: var(--gutter); right: var(--gutter); bottom: max(8px, env(safe-area-inset-bottom)); pointer-events: none; align-items: end; grid-template-columns: 1fr auto 1fr; grid-template-areas: "speed actions turn"; }
+  .controls > * { pointer-events: auto; }
+  .stick { --size: min(36dvh, 150px); background: var(--panel); }
+  .actions { width: min(34vw, 250px); gap: 6px; background: var(--panel); padding: 6px; border-radius: var(--radius); grid-template-columns: 1fr; }
+  .actions .row { display: grid; }
+  #btn-control, .btn.estop, #btn-arm, #btn-disarm, #btn-reset, #btn-boost { order: 0; }
+  .btn { min-height: 40px; padding: 4px 8px; }
+  .btn.estop { min-height: 52px; }
+  .readouts { top: 8px; bottom: auto; }
+  .spark { display: none; }
+}
+@media (max-width: 380px) { .chip .label { display: none; } .brand { display: none; } .spark { display: none; } }
+@media (prefers-reduced-motion: reduce) { .knob { transition: none; } }
